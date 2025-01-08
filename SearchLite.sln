@@ -1,0 +1,51 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SearchLite", "Source\SearchLite\SearchLite.csproj", "{732D5726-4614-44AF-86A0-C52DE0B3EF57}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SearchLite.Tests", "Tests\SearchLite.Tests\SearchLite.Tests.csproj", "{30589B76-03D3-47EE-86F5-9580981A1A42}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SearchLite.Sqlite", "Source\SearchLite.Sqlite\SearchLite.Sqlite.csproj", "{F2C07B2A-5C52-4089-B22D-3693F0CCE075}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SearchLite.Postgres", "Source\SearchLite.Postgres\SearchLite.Postgres.csproj", "{6DA7AA08-571B-432F-BD57-782373ABFC24}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".meta", ".meta", "{100FC658-D97C-45CE-9991-E5600218D582}"
+	ProjectSection(SolutionItems) = preProject
+		readme.md = readme.md
+		Directory.Build.props = Source\Directory.Build.props
+		.release-please-manifest.json = .release-please-manifest.json
+		readme.nuget.md = readme.nuget.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{4AC2C1D6-D09C-44F8-92BB-F095F027E1CD}"
+	ProjectSection(SolutionItems) = preProject
+		.github\workflows\dotnet.yml = .github\workflows\dotnet.yml
+		CHANGELOG.md = CHANGELOG.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{732D5726-4614-44AF-86A0-C52DE0B3EF57}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{732D5726-4614-44AF-86A0-C52DE0B3EF57}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{732D5726-4614-44AF-86A0-C52DE0B3EF57}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{732D5726-4614-44AF-86A0-C52DE0B3EF57}.Release|Any CPU.Build.0 = Release|Any CPU
+		{30589B76-03D3-47EE-86F5-9580981A1A42}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{30589B76-03D3-47EE-86F5-9580981A1A42}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{30589B76-03D3-47EE-86F5-9580981A1A42}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{30589B76-03D3-47EE-86F5-9580981A1A42}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2C07B2A-5C52-4089-B22D-3693F0CCE075}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2C07B2A-5C52-4089-B22D-3693F0CCE075}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2C07B2A-5C52-4089-B22D-3693F0CCE075}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2C07B2A-5C52-4089-B22D-3693F0CCE075}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{4AC2C1D6-D09C-44F8-92BB-F095F027E1CD} = {100FC658-D97C-45CE-9991-E5600218D582}
+	EndGlobalSection
+EndGlobal
