@@ -12,14 +12,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".meta", ".meta", "{100FC658
 	ProjectSection(SolutionItems) = preProject
 		readme.md = readme.md
 		Directory.Build.props = Source\Directory.Build.props
-		.release-please-manifest.json = .release-please-manifest.json
 		readme.nuget.md = readme.nuget.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{4AC2C1D6-D09C-44F8-92BB-F095F027E1CD}"
 	ProjectSection(SolutionItems) = preProject
 		.github\workflows\dotnet.yml = .github\workflows\dotnet.yml
-		CHANGELOG.md = CHANGELOG.md
 	EndProjectSection
 EndProject
 Global
