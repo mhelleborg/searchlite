@@ -10,6 +10,7 @@ public class SearchResult<T>
 {
     public required string Id { get; init; }
     public required float Score { get; init; }
+    public required DateTimeOffset LastUpdated { get; init; }
     public T? Document { get; init; }
 }
 

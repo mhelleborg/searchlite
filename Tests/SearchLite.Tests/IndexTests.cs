@@ -71,6 +71,7 @@ public abstract class IndexTests
     [Fact]
     public async Task SearchAsync_WithFilters_ShouldReturnMatchingDocuments()
     {
+        var before = DateTimeOffset.Now - TimeSpan.FromSeconds(1);
         // Arrange
         var docs = new[]
         {
@@ -102,6 +103,7 @@ public abstract class IndexTests
         result.Results.Should().ContainSingle()
             .Which.Document.Should().NotBeNull();
         result.Results.Single().Id.Should().Be("1");
+        result.Results.Single().LastUpdated.Should().BeAfter(before).And.BeBefore(DateTimeOffset.Now);
     }
 
     [Fact]
@@ -284,7 +286,7 @@ public abstract class IndexTests
     {
         // Arrange
         var collectionNames = Enumerable.Range(1, collectionCount)
-            .Select(it => Guid.NewGuid().ToString("N")[..6]);
+            .Select(_ => Guid.NewGuid().ToString("N")[..6]);
 
         // Act & Assert
         await Task.WhenAll(collectionNames.Select(async i =>

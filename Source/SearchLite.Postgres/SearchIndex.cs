@@ -66,7 +66,8 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                    VALUES (@id, @doc, to_tsvector(@text))
                    ON CONFLICT (id) DO UPDATE 
                    SET document = @doc,
-                       search_vector = to_tsvector(@text)
+                       search_vector = to_tsvector(@text),
+                       last_updated = now();
                    """;
 
         await using var cmd = new NpgsqlCommand(sql, conn);
@@ -151,12 +152,12 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
 
         var sql = $"""
                    WITH ranked_docs AS (
-                      SELECT id, document, 
+                      SELECT id, document, last_updated,
                              ts_rank(search_vector, query) as rank
                       FROM {TableName}, {toQuery}(@Query) query
                       {clauses.ToWhereClause()}
                    )
-                   SELECT id, document, rank, COUNT(*) OVER() as total
+                   SELECT id, document, rank, COUNT(*) OVER() as total, last_updated
                    FROM ranked_docs
                    WHERE rank >= @minScore
                    order by rank desc
@@ -183,6 +184,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
             results.Add(new SearchResult<T>
             {
                 Id = reader.GetString(0),
+                LastUpdated = reader.GetDateTime(4),
                 Score = score,
                 Document = request.Options.IncludeRawDocument && !string.IsNullOrEmpty(json)
                     ? JsonSerializer.Deserialize<T>(json)
@@ -253,6 +255,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                            id TEXT,
                            document JSONB,
                            search_vector tsvector,
+                           last_updated timestamptz default now(),
                            PRIMARY KEY (id)
                        );
                        -- GIN

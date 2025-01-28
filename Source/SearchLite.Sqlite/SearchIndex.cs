@@ -135,6 +135,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                    WITH ranked_docs AS (
                        SELECT m.id as id,
                               m.document,
+                              m.last_updated,
                               fts.rank * -1 as rank
                        FROM {TableName} m
                        RIGHT JOIN (
@@ -144,7 +145,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                        ) fts ON m.id = fts.id
                        {clauses.ToWhereClause()}
                    )
-                   SELECT id, document, rank, COUNT(*) OVER() as total
+                   SELECT id, document, last_updated, rank, COUNT(*) OVER() as total
                    FROM ranked_docs
                    WHERE rank >= @minScore
                    ORDER BY rank desc
@@ -171,6 +172,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
             results.Add(new SearchResult<T>
             {
                 Id = reader.GetString(0),
+                LastUpdated = new DateTimeOffset(reader.GetDateTime(2), TimeSpan.Zero),
                 Score = score,
                 Document = request.Options.IncludeRawDocument
                     ? JsonSerializer.Deserialize<T>(reader.GetString(1))
@@ -201,8 +203,8 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         var limitClause = $"LIMIT {request.Options.MaxResults}";
 
         var selectColumns = request.Options.IncludeRawDocument
-            ? "m.id, m.document, COUNT(*) OVER() as total"
-            : "m.id, COUNT(*) OVER() as total";
+            ? "m.id, m.last_updated, m.document, COUNT(*) OVER() as total"
+            : "m.id, m.last_updated, COUNT(*) OVER() as total";
 
         var sql = $"""
                    SELECT {selectColumns}
@@ -224,14 +226,15 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            totalCount = reader.GetInt32(request.Options.IncludeRawDocument ? 2 : 1);
+            totalCount = reader.GetInt32(request.Options.IncludeRawDocument ? 3 : 2);
 
             results.Add(new SearchResult<T>
             {
                 Id = reader.GetString(0),
+                LastUpdated = new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
                 Score = score,
                 Document = request.Options.IncludeRawDocument
-                    ? JsonSerializer.Deserialize<T>(reader.GetString(1))
+                    ? JsonSerializer.Deserialize<T>(reader.GetString(2))
                     : default
             });
         }
@@ -335,7 +338,8 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                                 CREATE TABLE IF NOT EXISTS {TableName} (
                                     id TEXT PRIMARY KEY NOT NULL,
                                     document TEXT NOT NULL,
-                                    search_text TEXT NOT NULL
+                                    search_text TEXT NOT NULL,
+                                    last_updated DATETIME NOT NULL default (datetime('now', 'utc'))
                                 );
                                 """;
 
