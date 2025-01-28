@@ -13,7 +13,7 @@ internal static class Extensions
 
         return "WHERE " + string.Join(" AND ", clauses.Select(c => c.Sql));
     }
-    
+
     public static void AddParameters(this NpgsqlCommand command, IReadOnlyCollection<Clause> clauses)
     {
         foreach (var clause in clauses)

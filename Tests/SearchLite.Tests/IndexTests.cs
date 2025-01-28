@@ -312,4 +312,89 @@ public abstract class IndexTests
             count.Should().Be(docCountPerCollection);
         }));
     }
+
+    [Fact]
+    public async Task SearchAsync_OrderByViews_ShouldReturnOrderedResults()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc 1", Views = 100 },
+            new TestDocument { Id = "2", Title = "Doc 2", Views = 300 },
+            new TestDocument { Id = "3", Title = "Doc 3", Views = 200 }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>().OrderByDescending(it => it.Views);
+        ;
+
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(3);
+        result.Results.Select(r => r.Document!.Views)
+            .Should().BeInDescendingOrder();
+        result.Results[0].Document!.Views.Should().Be(300);
+        result.Results[1].Document!.Views.Should().Be(200);
+        result.Results[2].Document!.Views.Should().Be(100);
+    }
+
+    [Fact]
+    public async Task SearchAsync_OrderByCreatedAt_Ascending_ShouldReturnOrderedResults()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc 1", CreatedAt = now.AddDays(-1) },
+            new TestDocument { Id = "2", Title = "Doc 2", CreatedAt = now.AddDays(-3) },
+            new TestDocument { Id = "3", Title = "Doc 3", CreatedAt = now.AddDays(-2) }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>();
+        request.OrderBys.Add(new OrderByNode<TestDocument>
+        {
+            PropertyName = "CreatedAt",
+            Direction = SortDirection.Ascending
+        });
+
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(3);
+        result.Results.Select(r => r.Document!.CreatedAt)
+            .Should().BeInAscendingOrder();
+        result.Results[0].Document!.Id.Should().Be("2");
+        result.Results[1].Document!.Id.Should().Be("3");
+        result.Results[2].Document!.Id.Should().Be("1");
+    }
+
+    [Fact]
+    public async Task SearchAsync_MultipleOrderBy_ShouldRespectOrdering()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc 1", Views = 100, Content = "AAA" },
+            new TestDocument { Id = "2", Title = "Doc 2", Views = 100, Content = "BBB" },
+            new TestDocument { Id = "3", Title = "Doc 3", Views = 200, Content = "CCC" }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>()
+            .OrderByDescending(it => it.Views)
+            .OrderByAscending(it => it.Content);
+
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(3);
+        result.Results[0].Document!.Views.Should().Be(200);
+        result.Results[1].Document!.Content.Should().Be("AAA");
+        result.Results[2].Document!.Content.Should().Be("BBB");
+    }
 }

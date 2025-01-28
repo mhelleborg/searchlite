@@ -10,5 +10,6 @@ public interface ISearchEngineManager
     /// <param name="cancellationToken"></param>s
     /// <typeparam name="T">Indexed types must extend ISearchableDocument to provide ID and the searchable text</typeparam>
     /// <returns>The search index</returns>
-    Task<ISearchIndex<T>> Get<T>(string collectionName, CancellationToken cancellationToken) where T : ISearchableDocument;
+    Task<ISearchIndex<T>> Get<T>(string collectionName, CancellationToken cancellationToken)
+        where T : ISearchableDocument;
 }

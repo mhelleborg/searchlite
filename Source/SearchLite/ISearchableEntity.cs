@@ -9,7 +9,7 @@ public interface ISearchableEntity
     /// Unique identifier within the index
     /// </summary>
     string Id { get; }
-    
+
     /// <summary>
     /// The searchable text for the document
     /// </summary>

@@ -40,7 +40,7 @@ public class WhereClauseTests
     public void Should_Handle_Boolean_Comparison()
     {
         var clause = BuildClause(x => x.IsActive == true);
-        
+
         clause.Sql.Should().Be("CAST(json_extract(document, '$.IsActive') AS INTEGER) = @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(true);
@@ -50,7 +50,7 @@ public class WhereClauseTests
     public void Should_Handle_Double_Comparison()
     {
         var clause = BuildClause(x => x.Score >= 95.5);
-        
+
         clause.Sql.Should().Be("CAST(json_extract(document, '$.Score') AS REAL) >= @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(95.5);

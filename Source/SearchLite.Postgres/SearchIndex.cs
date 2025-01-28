@@ -11,6 +11,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     private readonly SearchManager _manager;
     public string TableName { get; }
     public bool Initialized { get; private set; }
+
     public SearchIndex(string connectionString, string tableName, SearchManager manager)
     {
         _connectionString = connectionString;
@@ -139,7 +140,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
         var sw = Stopwatch.StartNew();
 
         var clauses = BuildWhereClauses(request);
-        // var orderClause = BuildOrderClause(request);
+        var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank DESC";
         var limitClause = $"LIMIT {request.Options.MaxResults}";
 
         var query = request.Query ?? "";
@@ -160,7 +161,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                    SELECT id, document, rank, COUNT(*) OVER() as total, last_updated
                    FROM ranked_docs
                    WHERE rank >= @minScore
-                   order by rank desc
+                   {orderClause}
                    {limitClause}
                    """;
 
@@ -199,6 +200,23 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
             MaxScore = maxScore,
             SearchTime = sw.Elapsed
         };
+    }
+
+    private static string? BuildOrderByClause(SearchRequest<T> request)
+    {
+        if (request.OrderBys.Count == 0)
+        {
+            return null;
+        }
+
+        var orderClauses = request.OrderBys.Select(order =>
+        {
+            // Convert property name to jsonb path and direction
+            var direction = order.Direction == SortDirection.Ascending ? "ASC" : "DESC";
+            return $"document->'{order.PropertyName}' {direction}";
+        });
+
+        return $"ORDER BY {string.Join(", ", orderClauses)}";
     }
 
     public async Task DeleteAsync(string id, CancellationToken ct = default)
@@ -285,7 +303,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
         return Convert.ToInt64(result);
     }
 
-    private List<Clause> BuildWhereClauses(SearchRequest<T> request)
+    private static List<Clause> BuildWhereClauses(SearchRequest<T> request)
     {
         List<Clause> clauses = [];
 

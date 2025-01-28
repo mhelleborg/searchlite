@@ -21,7 +21,7 @@ public class SearchManager(string? connectionString) : ISearchEngineManager
         }
 
         if (searchEngine.Initialized) return searchEngine;
-        
+
         await _lock.WaitAsync(cancellationToken);
         try
         {
@@ -41,7 +41,7 @@ public class SearchManager(string? connectionString) : ISearchEngineManager
     private ISearchIndex<T> Create<T>(string collectionName) where T : ISearchableDocument
     {
         var cs = connectionString ?? $"Data Source={collectionName};Mode=Memory;Cache=Shared";
-        
+
         return new SearchIndex<T>(cs, collectionName, this);
     }
 

@@ -21,4 +21,3 @@ public class SearchResponse<T>
     public float MaxScore { get; init; }
     public TimeSpan SearchTime { get; init; }
 }
-

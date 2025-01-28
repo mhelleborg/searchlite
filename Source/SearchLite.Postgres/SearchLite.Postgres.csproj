@@ -7,9 +7,9 @@
     <ItemGroup>
         <PackageReference Include="Npgsql" />
     </ItemGroup>
-    
+
     <ItemGroup>
-      <ProjectReference Include="..\SearchLite\SearchLite.csproj" />
+        <ProjectReference Include="..\SearchLite\SearchLite.csproj" />
     </ItemGroup>
 
 </Project>

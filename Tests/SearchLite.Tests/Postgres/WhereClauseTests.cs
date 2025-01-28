@@ -20,7 +20,7 @@ public class WhereClauseTests
     public void Should_Handle_Simple_Integer_Comparison()
     {
         var clause = BuildClause(x => x.Age > 18);
-        
+
         clause.Sql.Should().Be("(document->>'Age')::integer > @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(18);
@@ -30,7 +30,7 @@ public class WhereClauseTests
     public void Should_Handle_String_Equality()
     {
         var clause = BuildClause(x => x.Name == "John");
-        
+
         clause.Sql.Should().Be("(document->>'Name')::text = @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("John");
@@ -58,7 +58,7 @@ public class WhereClauseTests
     public void Should_Handle_Decimal_Comparison()
     {
         var clause = BuildClause(x => x.Price < 199.99m);
-        
+
         clause.Sql.Should().Be("(document->>'Price')::numeric < @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(199.99m);
@@ -69,7 +69,7 @@ public class WhereClauseTests
     {
         var date = new DateTime(2024, 1, 1);
         var clause = BuildClause(x => x.CreatedAt > date);
-        
+
         clause.Sql.Should().Be("(document->>'CreatedAt')::timestamp > @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(date);
@@ -79,7 +79,7 @@ public class WhereClauseTests
     public void Should_Handle_Multiple_Conditions_With_And()
     {
         var clause = BuildClause(x => x.Age > 18 && x.IsActive == true);
-        
+
         clause.Sql.Should().Be("((document->>'Age')::integer > @p0 AND (document->>'IsActive')::boolean = @p1)");
         clause.Parameters.Should().HaveCount(2);
         clause.Parameters[0].Value.Should().Be(18);
@@ -90,7 +90,7 @@ public class WhereClauseTests
     public void Should_Handle_Multiple_Conditions_With_Or()
     {
         var clause = BuildClause(x => x.Name == "John" || x.Name == "Jane");
-        
+
         clause.Sql.Should().Be("((document->>'Name')::text = @p0 OR (document->>'Name')::text = @p1)");
         clause.Parameters.Should().HaveCount(2);
         clause.Parameters[0].Value.Should().Be("John");
@@ -102,7 +102,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x =>
             (x.Age > 18 && x.IsActive == true) || (x.Score >= 95.5 && x.Name == "John"));
-        
+
         clause.Sql.Should().Be(
             "(((document->>'Age')::integer > @p0 AND (document->>'IsActive')::boolean = @p1) OR " +
             "((document->>'Score')::numeric >= @p2 AND (document->>'Name')::text = @p3))");
@@ -147,15 +147,15 @@ public class WhereClauseTests
         foreach (var testCase in cases)
         {
             var clause = BuildClause(testCase.expression);
-            
+
             clause.Sql.Should().Be(testCase.expected);
             clause.Parameters.Should().HaveCount(1);
             clause.Parameters[0].Value.Should().Be(18);
         }
     }
-    
+
     private static Clause BuildClause(Expression<Func<TestModel, bool>> predicate) => BuildClauses(predicate).Single();
-    
+
     private static IReadOnlyList<Clause> BuildClauses(params IEnumerable<Expression<Func<TestModel, bool>>> predicates)
     {
         return predicates.SelectMany(predicate =>
