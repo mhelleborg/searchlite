@@ -116,6 +116,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         var sw = Stopwatch.StartNew();
 
         var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
+        var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank desc";
         var limitClause = $"LIMIT {request.Options.MaxResults}";
 
         if (string.IsNullOrEmpty(request.Query))
@@ -148,7 +149,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                    SELECT id, document, last_updated, rank, COUNT(*) OVER() as total
                    FROM ranked_docs
                    WHERE rank >= @minScore
-                   ORDER BY rank desc
+                   {orderClause}
                    {limitClause}
                    """;
 
@@ -201,6 +202,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         var sw = Stopwatch.StartNew();
         var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
         var limitClause = $"LIMIT {request.Options.MaxResults}";
+        var orderClause = BuildOrderByClause(request) ?? "ORDER BY m.id";
 
         var selectColumns = request.Options.IncludeRawDocument
             ? "m.id, m.last_updated, m.document, COUNT(*) OVER() as total"
@@ -210,7 +212,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                    SELECT {selectColumns}
                    FROM {TableName} m
                    {clauses.ToWhereClause()}
-                   ORDER BY m.id
+                   {orderClause}
                    {limitClause}
                    """;
 
@@ -378,5 +380,22 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         }, cancellationToken);
     }
 
+    private static string? BuildOrderByClause(SearchRequest<T> request)
+    {
+        if (request.OrderBys.Count == 0)
+        {
+            return null;
+        }
+
+        var orderClauses = request.OrderBys.Select(order =>
+        {
+            // SQLite uses json_extract with $ prefix for JSON path
+            var direction = order.Direction == SortDirection.Ascending ? "ASC" : "DESC";
+            return $"json_extract(m.document, '$.{order.PropertyName}') {direction}";
+        });
+
+        return $"ORDER BY {string.Join(", ", orderClauses)}";
+    }
+    
     public static string GetTableName(string collectionName) => $"SearchLite_{typeof(T).Name}_{collectionName}";
 }
