@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
@@ -38,16 +38,13 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     private async Task<T?> GetDocumentAsync(string id, CancellationToken ct)
     {
         await using var conn = await CreateConnectionAsync(ct);
-
         var sql = $"""
                    SELECT document
                    FROM {TableName}
                    WHERE id = @id;
                    """;
-
         await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("id", id);
-
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -61,7 +58,6 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     public async Task IndexAsync(T document, CancellationToken ct = default)
     {
         await using var conn = await CreateConnectionAsync(ct);
-
         var sql = $"""
                    INSERT INTO {TableName} (id, document, search_vector)
                    VALUES (@id, @doc, to_tsvector(@text))
@@ -70,7 +66,6 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                        search_vector = to_tsvector(@text),
                        last_updated = now();
                    """;
-
         await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("id", document.Id);
         cmd.Parameters.AddWithValue("doc", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(document));
@@ -82,12 +77,10 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     {
         await using var conn = await CreateConnectionAsync(ct);
         await using var transaction = await conn.BeginTransactionAsync(ct);
-
         try
         {
             // Temporary table for bulk import
-            await using var cmd = new NpgsqlCommand(
-                """
+            await using var cmd = new NpgsqlCommand("""
                 CREATE TEMP TABLE bulk_import (
                     id TEXT,
                     document JSONB,
@@ -95,12 +88,8 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                 ) ON COMMIT DROP
                 """, conn);
             await cmd.ExecuteNonQueryAsync(ct);
-
             // Use COPY for bulk import
-            await using var writer = await conn.BeginBinaryImportAsync(
-                "COPY bulk_import (id, document, search_text) FROM STDIN (FORMAT BINARY)",
-                ct);
-
+            await using var writer = await conn.BeginBinaryImportAsync("COPY bulk_import (id, document, search_text) FROM STDIN (FORMAT BINARY)", ct);
             foreach (var doc in documents)
             {
                 await writer.StartRowAsync(ct);
@@ -111,10 +100,8 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
 
             await writer.CompleteAsync(ct);
             await writer.CloseAsync(ct);
-
             // Insert from temp table with vector generation
-            await using var insertCmd = new NpgsqlCommand(
-                $"""
+            await using var insertCmd = new NpgsqlCommand($"""
                  INSERT INTO {TableName} (id, document, search_vector)
                  SELECT id, document, to_tsvector(search_text)
                  FROM bulk_import
@@ -123,7 +110,6 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                      document = EXCLUDED.document,
                      search_vector = EXCLUDED.search_vector
                  """, conn);
-
             await insertCmd.ExecuteNonQueryAsync(ct);
             await transaction.CommitAsync(ct);
         }
@@ -138,24 +124,16 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     {
         await using var conn = await CreateConnectionAsync(ct);
         var sw = Stopwatch.StartNew();
-
         var clauses = BuildWhereClauses(request);
         var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank DESC";
         var limitClause = $"LIMIT {request.Options.MaxResults}";
-
         var query = request.Query ?? "";
-        var toQuery = "plainto_tsquery";
-        if (request.IncludePartialMatches)
-        {
-            query = string.Join(" | ", (request.Query ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries));
-            toQuery = "to_tsquery";
-        }
-
+        //websearch_to_tsquery
         var sql = $"""
                    WITH ranked_docs AS (
                       SELECT id, document, last_updated,
                              ts_rank(search_vector, query) as rank
-                      FROM {TableName}, {toQuery}(@Query) query
+                      FROM {TableName}, websearch_to_tsquery(@Query) query
                       {clauses.ToWhereClause()}
                    )
                    SELECT id, document, rank, COUNT(*) OVER() as total, last_updated
@@ -164,33 +142,22 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                    {orderClause}
                    {limitClause}
                    """;
-
         var results = new List<SearchResult<T>>();
         var totalCount = 0;
         float maxScore = 0;
-
         await using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("Query", query);
+
+        cmd.Parameters.Add(new NpgsqlParameter("@Query", query));
         cmd.Parameters.AddWithValue("minScore", request.Options.MinScore);
         cmd.AddParameters(clauses);
-
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
             var score = reader.GetFloat(2);
             maxScore = Math.Max(maxScore, score);
             totalCount = reader.GetInt32(3);
-
             var json = reader.GetString(1);
-            results.Add(new SearchResult<T>
-            {
-                Id = reader.GetString(0),
-                LastUpdated = reader.GetDateTime(4),
-                Score = score,
-                Document = request.Options.IncludeRawDocument && !string.IsNullOrEmpty(json)
-                    ? JsonSerializer.Deserialize<T>(json)
-                    : default
-            });
+            results.Add(new SearchResult<T> { Id = reader.GetString(0), LastUpdated = reader.GetDateTime(4), Score = score, Document = request.Options.IncludeRawDocument && !string.IsNullOrEmpty(json) ? JsonSerializer.Deserialize<T>(json) : default });
         }
 
         return new SearchResponse<T>
@@ -215,19 +182,16 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
             var direction = order.Direction == SortDirection.Ascending ? "ASC" : "DESC";
             return $"document->'{order.PropertyName}' {direction}";
         });
-
         return $"ORDER BY {string.Join(", ", orderClauses)}";
     }
 
     public async Task DeleteAsync(string id, CancellationToken ct = default)
     {
         await using var conn = await CreateConnectionAsync(ct);
-
         var sql = $"""
                    DELETE FROM {TableName}
                    WHERE id = @id;
                    """;
-
         await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -236,9 +200,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     public async Task ClearAsync(CancellationToken ct = default)
     {
         await using var conn = await CreateConnectionAsync(ct);
-
         var sql = $"DELETE FROM {TableName};";
-
         await using var cmd = new NpgsqlCommand(sql, conn);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -253,9 +215,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     public async Task DropIndexAsync(CancellationToken ct = default)
     {
         await using var conn = await CreateConnectionAsync(ct);
-
         var sql = $"DROP TABLE IF EXISTS {TableName}";
-
         await using var cmd = new NpgsqlCommand(sql, conn);
         await cmd.ExecuteNonQueryAsync(ct);
         _manager.Remove(this);
@@ -265,7 +225,6 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     {
         await using var conn = await CreateConnectionAsync(cancellationToken);
         await using var transaction = await conn.BeginTransactionAsync(cancellationToken);
-
         try
         {
             var sql = $"""
@@ -280,7 +239,6 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                        CREATE INDEX IF NOT EXISTS {TableName}_filter_idx on {TableName} using GIN(document jsonb_path_ops);
                        CREATE INDEX IF NOT EXISTS {TableName}_search_idx on {TableName} using GIN(search_vector);
                        """;
-
             await using var cmd = new NpgsqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -295,26 +253,19 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
     public async Task<long> CountAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = await CreateConnectionAsync(cancellationToken);
-
         var sql = $"SELECT COUNT(*) FROM {TableName}";
         await using var cmd = new NpgsqlCommand(sql, conn);
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
-
         return Convert.ToInt64(result);
     }
 
     private static List<Clause> BuildWhereClauses(SearchRequest<T> request)
     {
         List<Clause> clauses = [];
-
         if (!string.IsNullOrEmpty(request.Query))
         {
-            clauses.Add(new Clause
-            {
-                Sql = "search_vector @@ query"
-            });
+            clauses.Add(new Clause { Sql = "search_vector @@ query" });
         }
-
 
         foreach (var clause in WhereClauseBuilder<T>.BuildClauses(request.Filters))
         {

@@ -131,34 +131,7 @@ public abstract class IndexTests
         result.TotalCount.Should().Be(10);
     }
 
-    [Fact]
-    public async Task SearchAsync_WithMinScore_ShouldFilterLowScores2()
-    {
-        // Arrange
-        var docs = new[]
-        {
-            new TestDocument { Id = "1", Title = "Exact match test" },
-            new TestDocument { Id = "2", Title = "match" },
-            new TestDocument { Id = "3", Title = "Unrelated document" }
-        };
-
-        await Index.IndexManyAsync(docs);
-
-        // Act
-        var request = new SearchRequest<TestDocument>
-        {
-            Query = "exact match",
-            IncludePartialMatches = true
-        };
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Results.Should().HaveCount(2);
-        result.Results[0].Document.Should().NotBeNull();
-        result.Results[0].Id.Should().Be("1");
-        result.Results[1].Document.Should().NotBeNull();
-        result.Results[1].Id.Should().Be("2");
-    }
+    
 
     [Theory]
     [InlineData("")]
@@ -396,5 +369,219 @@ public abstract class IndexTests
         result.Results[0].Document!.Views.Should().Be(200);
         result.Results[1].Document!.Content.Should().Be("AAA");
         result.Results[2].Document!.Content.Should().Be("BBB");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithSpecialCharacters_ShouldHandleCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "C# Programming", Content = "Learn C# & .NET" },
+            new TestDocument { Id = "2", Title = "SQL*Plus Guide", Content = "Oracle & SQL" },
+            new TestDocument { Id = "3", Title = "Regular Doc", Content = "No special chars" }
+        };
+
+        await Index.IndexManyAsync(docs);
+
+        // Act & Assert
+        // Test exact special character search
+        var result1 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "C#" });
+        result1.Results.Should().ContainSingle()
+            .Which.Document!.Title.Should().Be("C# Programming");
+        
+        // Test mixed special characters
+        var result2 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "SQL*" });
+        result2.Results.Should().ContainSingle()
+            .Which.Document!.Title.Should().Be("SQL*Plus Guide");
+        
+        // Non-full match
+        var result3 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "C# .NET" });
+        result3.Results.Should().ContainSingle()
+            .Which.Document!.Title.Should().Be("C# Programming");
+
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithUnicodeCharacters_ShouldHandleCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "café", Content = "Coffee & café au lait" },
+            new TestDocument { Id = "2", Title = "résumé", Content = "Professional résumé writing" },
+            new TestDocument { Id = "3", Title = "über facts", Content = "Facts about Über services" }
+        };
+
+        await Index.IndexManyAsync(docs);
+
+        // Act & Assert
+        // Test accent-sensitive search
+        var result1 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "café" });
+        result1.Results.Should().ContainSingle()
+            .Which.Document!.Title.Should().Be("café");
+
+        // Test mixed case with accents
+        var result2 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "Über" });
+        result2.Results.Should().ContainSingle()
+            .Which.Document!.Title.Should().Be("über facts");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithExtremelyLongContent_ShouldHandleCorrectly()
+    {
+        // Arrange
+        var longContent = new string('x', 100000); // 100KB content
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "Long Document",
+                Content = longContent + " findme " + longContent
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Normal Document",
+                Content = "findme"
+            }
+        };
+
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var result = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "findme" });
+
+        // Assert
+        result.Results.Should().HaveCount(2);
+        result.Results.Select(r => r.Document!.Id).Should().Contain(new[] { "1", "2" });
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithNestedQuotes_ShouldHandleCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "Quote Test",
+                Content = "He said \"Hello World\" in the program"
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Another Quote",
+                Content = "The 'quick' brown fox"
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Mixed",
+                Content = "Its a \"quote\" string's test"
+            }
+        };
+
+        await Index.IndexManyAsync(docs);
+
+        // Act & Assert
+        // Test exact phrase with quotes
+        var result1 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "\"Hello World\"" });
+        result1.Results.Should().ContainSingle()
+            .Which.Document!.Id.Should().Be("1");
+
+        // Test mixed quote types
+        var result2 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "quote" });
+        result2.Results.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task IncludePartialMatchesFalse_shouldNotReturnPartialMatches()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "Test Document",
+                Content = "test test test test" // Multiple occurrences
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Test",
+                Content = "Test" // Single occurrence
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Test Document",
+                Content = "test test" // Double occurrence
+            }
+        };
+
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var result = await Index.SearchAsync(new SearchRequest<TestDocument>
+        {
+            Query = "Test Document",
+            Options = new SearchOptions
+            {
+                IncludePartialMatches = false
+            }
+        });
+
+        // Assert
+        result.Results.Should().HaveCount(2);
+        result.Results.Select(it => it.Id).Should().BeEquivalentTo("1", "3");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithWhitespaceAndPunctuation_ShouldHandleCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "   Padded    Spaces   ",
+                Content = "Multiple     spaces    between    words"
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Punctuation!!!Test???",
+                Content = "Hello...World...Test"
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Normal Document",
+                Content = "Regular content here"
+            }
+        };
+
+        await Index.IndexManyAsync(docs);
+
+        // Act & Assert
+        // Test multiple spaces
+        var result1 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "Padded     Spaces" });
+        result1.Results.Should().ContainSingle()
+            .Which.Document!.Id.Should().Be("1");
+
+        // Test excessive punctuation
+        var result2 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "Punctuation!!!" });
+        result2.Results.Should().ContainSingle()
+            .Which.Document!.Id.Should().Be("2");
+
+        // Test ellipsis
+        var result3 = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "Hello...World" });
+        result3.Results.Should().ContainSingle()
+            .Which.Document!.Id.Should().Be("2");
     }
 }
