@@ -19,6 +19,11 @@ public class SearchOptions
     /// If set to false, will only return the document id and score
     /// </summary>
     public bool IncludeRawDocument { get; set; } = true;
+    
+    /// <summary>
+    /// Flag if the search should include partial matches. If not, the query will only match on the full query
+    /// </summary>
+    public bool IncludePartialMatches { get; init; } = true;
 }
 
 public class SearchRequest<T>
@@ -46,10 +51,7 @@ public class SearchRequest<T>
     /// </summary>
     public SearchOptions Options { get; init; } = new();
 
-    /// <summary>
-    /// Flag if the search should include partial matches. If not, the query will only match on the full query
-    /// </summary>
-    public bool IncludePartialMatches { get; init; } = true;
+
 
     /// <summary>
     /// Add a filter from an expression

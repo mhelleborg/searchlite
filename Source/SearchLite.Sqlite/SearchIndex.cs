@@ -111,85 +111,75 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
             }
         }, ct);
 
-    public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, CancellationToken ct = default)
+public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, CancellationToken ct = default)
+{
+    var sw = Stopwatch.StartNew();
+
+    var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
+    var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank desc";
+    var limitClause = $"LIMIT {request.Options.MaxResults}";
+
+    if (string.IsNullOrEmpty(request.Query))
     {
-        var sw = Stopwatch.StartNew();
-
-        var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
-        var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank desc";
-        var limitClause = $"LIMIT {request.Options.MaxResults}";
-
-        if (string.IsNullOrEmpty(request.Query))
-        {
-            return await FilterAsync(request, ct);
-        }
-
-
-        var query = request.Query ?? "";
-        if (request.IncludePartialMatches && !string.IsNullOrEmpty(query))
-        {
-            // Convert space-separated terms into OR query
-            query = string.Join(" OR ", query.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        }
-
-        var sql = $"""
-                   WITH ranked_docs AS (
-                       SELECT m.id as id,
-                              m.document,
-                              m.last_updated,
-                              fts.rank * -1 as rank
-                       FROM {TableName} m
-                       RIGHT JOIN (
-                           SELECT id, rank
-                           FROM {FtsTableName}
-                           WHERE {FtsTableName} MATCH @Query
-                       ) fts ON m.id = fts.id
-                       {clauses.ToWhereClause()}
-                   )
-                   SELECT id, document, last_updated, rank, COUNT(*) OVER() as total
-                   FROM ranked_docs
-                   WHERE rank >= @minScore
-                   {orderClause}
-                   {limitClause}
-                   """;
-
-        var results = new List<SearchResult<T>>();
-        var totalCount = 0;
-        float maxScore = 0;
-
-
-        await using var cmd = new SqliteCommand(sql, Connection);
-        cmd.Parameters.AddWithValue("@Query", query);
-        cmd.Parameters.AddWithValue("@minScore", request.Options.MinScore);
-        cmd.AddParameters(clauses);
-
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            var score = Convert.ToSingle(reader.GetDouble(2));
-            maxScore = Math.Max(maxScore, score);
-            totalCount = reader.GetInt32(3);
-
-            results.Add(new SearchResult<T>
-            {
-                Id = reader.GetString(0),
-                LastUpdated = new DateTimeOffset(reader.GetDateTime(2), TimeSpan.Zero),
-                Score = score,
-                Document = request.Options.IncludeRawDocument
-                    ? JsonSerializer.Deserialize<T>(reader.GetString(1))
-                    : default
-            });
-        }
-
-        return new SearchResponse<T>
-        {
-            Results = results,
-            TotalCount = totalCount,
-            MaxScore = maxScore,
-            SearchTime = sw.Elapsed
-        };
+        return await FilterAsync(request, ct);
     }
 
+    var sql = $"""
+               WITH ranked_docs AS (
+                   SELECT m.id as id,
+                          m.document,
+                          m.last_updated,
+                          fts.rank * -1 as rank
+                   FROM {TableName} m
+                   RIGHT JOIN (
+                       SELECT id, rank
+                       FROM {FtsTableName}
+                       WHERE {FtsTableName} MATCH @Query
+                   ) fts ON m.id = fts.id
+                   {clauses.ToWhereClause()}
+               )
+               SELECT id, document, last_updated, rank, COUNT(*) OVER() as total
+               FROM ranked_docs
+               WHERE rank >= @minScore
+               {orderClause}
+               {limitClause}
+               """;
+
+    var results = new List<SearchResult<T>>();
+    var totalCount = 0;
+    float maxScore = 0;
+
+    await using var cmd = new SqliteCommand(sql, Connection);
+    cmd.Parameters.Add(CreateMatchParameter(request.Query, request.Options.IncludePartialMatches));
+    cmd.Parameters.AddWithValue("@minScore", request.Options.MinScore);
+    cmd.AddParameters(clauses);
+
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+    while (await reader.ReadAsync(ct))
+    {
+        var score = Convert.ToSingle(reader.GetDouble(2));
+        maxScore = Math.Max(maxScore, score);
+        totalCount = reader.GetInt32(3);
+
+        results.Add(new SearchResult<T>
+        {
+            Id = reader.GetString(0),
+            LastUpdated = new DateTimeOffset(reader.GetDateTime(2), TimeSpan.Zero),
+            Score = score,
+            Document = request.Options.IncludeRawDocument
+                ? JsonSerializer.Deserialize<T>(reader.GetString(1))
+                : default
+        });
+    }
+
+    return new SearchResponse<T>
+    {
+        Results = results,
+        TotalCount = totalCount,
+        MaxScore = maxScore,
+        SearchTime = sw.Elapsed
+    };
+}
     /// <summary>
     /// If the request does not include a text query, we can use a simpler filter query
     /// </summary>
@@ -398,4 +388,29 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
     }
 
     public static string GetTableName(string collectionName) => $"SearchLite_{typeof(T).Name}_{collectionName}";
+
+    private static SqliteParameter CreateMatchParameter(string query, bool includePartialMatches)
+    {
+        // For partial matches, we split the terms and wrap each individually
+        if (includePartialMatches && !string.IsNullOrWhiteSpace(query))
+        {
+            var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var escapedTerms = terms.Select(EscapeFtsQuery);
+            return new SqliteParameter("@Query", string.Join(" OR ", escapedTerms));
+        }
+
+        return new SqliteParameter("@Query", EscapeFtsQuery(query));
+    }
+
+    private static string EscapeFtsQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return string.Empty;
+
+        // Replace any double quotes with double-double quotes
+        var escaped = query.Replace("\"", "\"\"");
+
+        // Wrap the entire query in double quotes
+        return $"\"{escaped}\"";
+    }
 }
