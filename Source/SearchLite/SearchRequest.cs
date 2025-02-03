@@ -1,4 +1,4 @@
-﻿using System.Linq.Expressions;
+using System.Linq.Expressions;
 
 namespace SearchLite;
 
@@ -19,7 +19,7 @@ public class SearchOptions
     /// If set to false, will only return the document id and score
     /// </summary>
     public bool IncludeRawDocument { get; set; } = true;
-    
+
     /// <summary>
     /// Flag if the search should include partial matches. If not, the query will only match on the full query
     /// </summary>
@@ -50,8 +50,6 @@ public class SearchRequest<T>
     /// Options for the search
     /// </summary>
     public SearchOptions Options { get; init; } = new();
-
-
 
     /// <summary>
     /// Add a filter from an expression
