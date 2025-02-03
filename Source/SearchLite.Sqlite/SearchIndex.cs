@@ -110,76 +110,87 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                 await docCmd.ExecuteNonQueryAsync(ct);
             }
         }, ct);
-
-public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, CancellationToken ct = default)
-{
-    var sw = Stopwatch.StartNew();
-
-    var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
-    var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank desc";
-    var limitClause = $"LIMIT {request.Options.MaxResults}";
-
-    if (string.IsNullOrEmpty(request.Query))
+    public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, CancellationToken ct = default)
     {
-        return await FilterAsync(request, ct);
-    }
+        var sw = Stopwatch.StartNew();
 
-    var sql = $"""
-               WITH ranked_docs AS (
-                   SELECT m.id as id,
-                          m.document,
-                          m.last_updated,
-                          fts.rank * -1 as rank
-                   FROM {TableName} m
-                   RIGHT JOIN (
-                       SELECT id, rank
-                       FROM {FtsTableName}
-                       WHERE {FtsTableName} MATCH @Query
-                   ) fts ON m.id = fts.id
-                   {clauses.ToWhereClause()}
-               )
-               SELECT id, document, last_updated, rank, COUNT(*) OVER() as total
-               FROM ranked_docs
-               WHERE rank >= @minScore
-               {orderClause}
-               {limitClause}
-               """;
+        var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
+        var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank desc";
 
-    var results = new List<SearchResult<T>>();
-    var totalCount = 0;
-    float maxScore = 0;
 
-    await using var cmd = new SqliteCommand(sql, Connection);
-    cmd.Parameters.Add(CreateMatchParameter(request.Query, request.Options.IncludePartialMatches));
-    cmd.Parameters.AddWithValue("@minScore", request.Options.MinScore);
-    cmd.AddParameters(clauses);
-
-    await using var reader = await cmd.ExecuteReaderAsync(ct);
-    while (await reader.ReadAsync(ct))
-    {
-        var score = Convert.ToSingle(reader.GetDouble(3));
-        maxScore = Math.Max(maxScore, score);
-        totalCount = reader.GetInt32(4);
-
-        results.Add(new SearchResult<T>
+        if (string.IsNullOrEmpty(request.Query))
         {
-            Id = reader.GetString(0),
-            LastUpdated = new DateTimeOffset(reader.GetDateTime(2), TimeSpan.Zero),
-            Score = score,
-            Document = request.Options.IncludeRawDocument
-                ? JsonSerializer.Deserialize<T>(reader.GetString(1))
-                : default
-        });
+            return await FilterAsync(request, ct);
+        }
+
+        var sql = $"""
+                   WITH ranked_docs AS (
+                       SELECT m.id as id,
+                              m.document,
+                              m.last_updated,
+                              fts.rank * -1 as rank
+                       FROM {TableName} m
+                       RIGHT JOIN (
+                           SELECT id, rank
+                           FROM {FtsTableName}
+                           WHERE {FtsTableName} MATCH @Query
+                       ) fts ON m.id = fts.id
+                       {clauses.ToWhereClause()}
+                   )
+                   SELECT id, document, last_updated, rank, COUNT(*) OVER() as total
+                   FROM ranked_docs
+                   WHERE rank >= @minScore
+                   {orderClause}
+                   {GetLimitClause(request)}
+                   """;
+
+        var results = new List<SearchResult<T>>();
+        var totalCount = 0;
+        float maxScore = 0;
+
+        await using var cmd = new SqliteCommand(sql, Connection);
+        cmd.Parameters.Add(CreateMatchParameter(request.Query, request.Options.IncludePartialMatches));
+        cmd.Parameters.AddWithValue("@minScore", request.Options.MinScore);
+        cmd.AddParameters(clauses);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var score = Convert.ToSingle(reader.GetDouble(3));
+            maxScore = Math.Max(maxScore, score);
+            totalCount = reader.GetInt32(4);
+
+            results.Add(new SearchResult<T>
+            {
+                Id = reader.GetString(0),
+                LastUpdated = new DateTimeOffset(reader.GetDateTime(2), TimeSpan.Zero),
+                Score = score,
+                Document = request.Options.IncludeRawDocument
+                    ? JsonSerializer.Deserialize<T>(reader.GetString(1))
+                    : default
+            });
+        }
+
+        return new SearchResponse<T>
+        {
+            Results = results,
+            TotalCount = totalCount,
+            MaxScore = maxScore,
+            SearchTime = sw.Elapsed
+        };
     }
 
-    return new SearchResponse<T>
+    private static string GetLimitClause(SearchRequest<T> request)
     {
-        Results = results,
-        TotalCount = totalCount,
-        MaxScore = maxScore,
-        SearchTime = sw.Elapsed
-    };
-}
+        if (request.Options.Skip > 0)
+        {
+            return $"LIMIT {request.Options.Skip}, {request.Options.Take}";
+        }
+        
+        return $"LIMIT {request.Options.Take}";
+    }
+
+
     /// <summary>
     /// If the request does not include a text query, we can use a simpler filter query
     /// </summary>
@@ -191,7 +202,6 @@ public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, Cance
     {
         var sw = Stopwatch.StartNew();
         var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
-        var limitClause = $"LIMIT {request.Options.MaxResults}";
         var orderClause = BuildOrderByClause(request) ?? "ORDER BY m.id";
 
         var selectColumns = request.Options.IncludeRawDocument
@@ -203,7 +213,7 @@ public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, Cance
                    FROM {TableName} m
                    {clauses.ToWhereClause()}
                    {orderClause}
-                   {limitClause}
+                   {GetLimitClause(request)}
                    """;
 
         var results = new List<SearchResult<T>>();

@@ -109,7 +109,7 @@ public abstract class IndexTests
             Query = "Doc",
             Options = new SearchOptions
             {
-                MaxResults = 5
+                Take = 5
             }
         };
         var result = await Index.SearchAsync(request);
@@ -129,12 +129,55 @@ public abstract class IndexTests
         {
             Options = new SearchOptions
             {
-                MaxResults = 5
+                Take = 5
             }
         };
         var result = await Index.SearchAsync(request);
         // Assert
         result.Results.Should().HaveCount(5);
+        result.TotalCount.Should().Be(10);
+    }
+    
+    [Fact]
+    public async Task SearchAsync_WithOptions_ShouldRespectMaxAndSkipWithFullText()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 10).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Query = "Doc",
+            Options = new SearchOptions
+            {
+                Skip = 7,
+                Take = 5
+            }
+        };
+        var result = await Index.SearchAsync(request);
+        // Assert
+        result.Results.Should().HaveCount(3);
+        result.TotalCount.Should().Be(10);
+    }
+    
+    [Fact]
+    public async Task SearchAsync_WithOptions_ShouldRespectMaxAndSkip()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 10).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions
+            {
+                Skip = 7,
+                Take = 5
+            }
+        };
+        var result = await Index.SearchAsync(request);
+        // Assert
+        result.Results.Should().HaveCount(3);
         result.TotalCount.Should().Be(10);
     }
 
@@ -189,7 +232,7 @@ public abstract class IndexTests
         var request = new SearchRequest<TestDocument>
         {
             Query = "",
-            Options = new SearchOptions { MaxResults = 1 }
+            Options = new SearchOptions { Take = 1 }
         };
         var result = await Index.SearchAsync(request);
         // Assert

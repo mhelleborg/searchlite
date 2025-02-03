@@ -5,9 +5,14 @@ namespace SearchLite;
 public class SearchOptions
 {
     /// <summary>
+    /// How many results to skip when returning results
+    /// </summary>
+    public int Skip { get; init; } = 0;
+
+    /// <summary>
     /// Max number of results to return
     /// </summary>
-    public int MaxResults { get; init; } = 100;
+    public int Take { get; init; } = 100;
 
     /// <summary>
     /// Score threshold to include in the results

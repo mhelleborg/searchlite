@@ -126,7 +126,8 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
         var sw = Stopwatch.StartNew();
         var clauses = BuildWhereClauses(request);
         var orderClause = BuildOrderByClause(request) ?? "ORDER BY rank DESC";
-        var limitClause = $"LIMIT {request.Options.MaxResults}";
+        var offsetClause = request.Options.Skip < 1 ? "" :  $"OFFSET {request.Options.Skip}";
+        var limitClause = $"LIMIT {request.Options.Take}";
         var query = request.Query ?? "";
         //websearch_to_tsquery
         var sql = $"""
@@ -140,6 +141,7 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
                    FROM ranked_docs
                    WHERE rank >= @minScore
                    {orderClause}
+                   {offsetClause}
                    {limitClause}
                    """;
         var results = new List<SearchResult<T>>();
