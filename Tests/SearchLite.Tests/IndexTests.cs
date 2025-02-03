@@ -57,6 +57,9 @@ public abstract class IndexTests
         searchedDoc.Should().BeEquivalentTo(doc);
         retrievedDoc.Should().NotBeNull();
         retrievedDoc.Should().BeEquivalentTo(doc);
+        
+        result.TotalCount.Should().Be(result.Results.Count); 
+
     }
 
     [Fact]
@@ -90,8 +93,31 @@ public abstract class IndexTests
         result.Results.Should().ContainSingle().Which.Document.Should().NotBeNull();
         result.Results.Single().Id.Should().Be("1");
         result.Results.Single().LastUpdated.Should().BeAfter(before).And.BeBefore(DateTimeOffset.Now);
+        result.TotalCount.Should().Be(result.Results.Count); 
+
     }
 
+    [Fact]
+    public async Task SearchAsync_WithOptions_ShouldRespectMaxResultsWithFullText()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 10).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Query = "Doc",
+            Options = new SearchOptions
+            {
+                MaxResults = 5
+            }
+        };
+        var result = await Index.SearchAsync(request);
+        // Assert
+        result.Results.Should().HaveCount(5);
+        result.TotalCount.Should().Be(10);
+    }
+    
     [Fact]
     public async Task SearchAsync_WithOptions_ShouldRespectMaxResults()
     {

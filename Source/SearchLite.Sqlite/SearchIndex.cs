@@ -157,9 +157,9 @@ public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, Cance
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
     {
-        var score = Convert.ToSingle(reader.GetDouble(2));
+        var score = Convert.ToSingle(reader.GetDouble(3));
         maxScore = Math.Max(maxScore, score);
-        totalCount = reader.GetInt32(3);
+        totalCount = reader.GetInt32(4);
 
         results.Add(new SearchResult<T>
         {
