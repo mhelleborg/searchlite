@@ -23,10 +23,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{4AC2
 		.github\workflows\dotnet.yml = .github\workflows\dotnet.yml
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{B6833913-8C7D-47AF-9B1B-D05C313A14E9}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SearchLite.Tests.Tests", "Tests\SearchLite.Tests.Tests\SearchLite.Tests.Tests.csproj", "{23144AFC-163E-4ED5-8691-9198291B0919}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -49,13 +45,8 @@ Global
 		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6DA7AA08-571B-432F-BD57-782373ABFC24}.Release|Any CPU.Build.0 = Release|Any CPU
-		{23144AFC-163E-4ED5-8691-9198291B0919}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{23144AFC-163E-4ED5-8691-9198291B0919}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{23144AFC-163E-4ED5-8691-9198291B0919}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{23144AFC-163E-4ED5-8691-9198291B0919}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{4AC2C1D6-D09C-44F8-92BB-F095F027E1CD} = {100FC658-D97C-45CE-9991-E5600218D582}
-		{23144AFC-163E-4ED5-8691-9198291B0919} = {B6833913-8C7D-47AF-9B1B-D05C313A14E9}
 	EndGlobalSection
 EndGlobal
