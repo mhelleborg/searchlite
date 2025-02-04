@@ -332,54 +332,53 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         }
     }
 
-    private Task EnsureTableExistsAsync(CancellationToken cancellationToken)
+private Task EnsureTableExistsAsync(CancellationToken cancellationToken)
+{
+    return SerializedWrite(async transaction =>
     {
-        return SerializedWrite(async transaction =>
-        {
-            var mainTableSql = $"""
-                                CREATE TABLE IF NOT EXISTS {TableName} (
-                                    id TEXT PRIMARY KEY NOT NULL,
-                                    document TEXT NOT NULL,
-                                    search_text TEXT NOT NULL,
-                                    last_updated DATETIME NOT NULL default (datetime('now', 'utc'))
-                                );
-                                """;
+        var mainTableSql = $"""
+                            CREATE TABLE IF NOT EXISTS {TableName} (
+                                id TEXT PRIMARY KEY NOT NULL,
+                                document TEXT NOT NULL,
+                                search_text TEXT NOT NULL,
+                                last_updated DATETIME NOT NULL default (datetime('now', 'utc'))
+                            );
+                            """;
 
-            await using var mainTableCmd = new SqliteCommand(mainTableSql, transaction.Connection, transaction);
-            await mainTableCmd.ExecuteNonQueryAsync(cancellationToken);
+        await using var mainTableCmd = new SqliteCommand(mainTableSql, transaction.Connection, transaction);
+        await mainTableCmd.ExecuteNonQueryAsync(cancellationToken);
 
-            // Create FTS table
-            var ftsTableSql = $"""
-                               CREATE VIRTUAL TABLE IF NOT EXISTS {FtsTableName} USING fts5(id, search_text);
-                               """;
+        // Create FTS table
+        var ftsTableSql = $"""
+                           CREATE VIRTUAL TABLE IF NOT EXISTS {FtsTableName} USING fts5(id, search_text);
+                           """;
 
-            await using var ftsTableCmd = new SqliteCommand(ftsTableSql, transaction.Connection, transaction);
-            await ftsTableCmd.ExecuteNonQueryAsync(cancellationToken);
+        await using var ftsTableCmd = new SqliteCommand(ftsTableSql, transaction.Connection, transaction);
+        await ftsTableCmd.ExecuteNonQueryAsync(cancellationToken);
 
-            // Create triggers to maintain FTS index
-            var triggersSql = $"""
-                               -- Trigger for INSERT
-                               CREATE TRIGGER IF NOT EXISTS {TableName}_ai AFTER INSERT ON {TableName} BEGIN
-                                   INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
-                               END;
+        // Create triggers to maintain FTS index
+        var triggersSql = $"""
+                           -- Trigger for INSERT
+                           CREATE TRIGGER IF NOT EXISTS {TableName}_ai AFTER INSERT ON {TableName} BEGIN
+                               INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
+                           END;
 
-                               -- Trigger for UPDATE
-                               CREATE TRIGGER IF NOT EXISTS {TableName}_au AFTER UPDATE ON {TableName} BEGIN
-                                   DELETE FROM {FtsTableName} WHERE rowid = old.id;
-                                   INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
-                               END;
+                           -- Trigger for UPDATE
+                           CREATE TRIGGER IF NOT EXISTS {TableName}_au AFTER UPDATE ON {TableName} BEGIN
+                               DELETE FROM {FtsTableName} WHERE id = old.id;
+                               INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
+                           END;
 
-                               -- Trigger for DELETE
-                               CREATE TRIGGER IF NOT EXISTS {TableName}_ad AFTER DELETE ON {TableName} BEGIN
-                                   DELETE FROM {FtsTableName} WHERE id = old.id;
-                               END;
-                               """;
+                           -- Trigger for DELETE
+                           CREATE TRIGGER IF NOT EXISTS {TableName}_ad AFTER DELETE ON {TableName} BEGIN
+                               DELETE FROM {FtsTableName} WHERE id = old.id;
+                           END;
+                           """;
 
-            await using var triggersCmd = new SqliteCommand(triggersSql, transaction.Connection, transaction);
-            await triggersCmd.ExecuteNonQueryAsync(cancellationToken);
-        }, cancellationToken);
-    }
-
+        await using var triggersCmd = new SqliteCommand(triggersSql, transaction.Connection, transaction);
+        await triggersCmd.ExecuteNonQueryAsync(cancellationToken);
+    }, cancellationToken);
+}
     private static string? BuildOrderByClause(SearchRequest<T> request)
     {
         if (request.OrderBys.Count == 0)

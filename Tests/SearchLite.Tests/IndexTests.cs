@@ -48,6 +48,8 @@ public abstract class IndexTests
         };
         // Act
         await Index.IndexAsync(doc);
+        await Index.IndexAsync(doc);
+        await Index.IndexAsync(doc);
         var result = await Index.SearchAsync(new SearchRequest<TestDocument> { Query = "Test" });
         var retrievedDoc = await Index.GetAsync(doc.Id);
         // Assert
