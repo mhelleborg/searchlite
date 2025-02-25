@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Npgsql;
 using NpgsqlTypes;
 
 namespace SearchLite.Postgres;
 
-public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
+public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
 {
     private readonly string _connectionString;
     private readonly SearchManager _manager;
@@ -277,5 +278,31 @@ public class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
         return clauses;
     }
 
-    public static string GetTableName(string collectionName) => $"SearchLite_{typeof(T).Name}_{collectionName}";
+    public static string GetTableName(string collectionName)
+    {
+        var sanitizedTypeName = IdentifierRegex().Replace(typeof(T).Name, "").ToLowerInvariant();
+        collectionName = IdentifierRegex().Replace(collectionName, "").TrimEnd('_').ToLowerInvariant();
+        
+        var budget = 63 - collectionName.Length - 11;
+        
+        if (budget > 0 && sanitizedTypeName.Length > budget)
+        {
+            sanitizedTypeName = sanitizedTypeName[..budget];
+        }
+        
+        var sanitized = $"searchlite_{sanitizedTypeName}_{collectionName}";
+  
+        
+         // Postgres has a 63-byte limit for identifiers
+        if (sanitized.Length > 63)
+        {
+            sanitized = sanitized[..63];
+        }
+
+
+        return sanitized;
+    }
+
+    [GeneratedRegex(@"[^a-zA-Z0-9_]")]
+    private static partial Regex IdentifierRegex();
 }

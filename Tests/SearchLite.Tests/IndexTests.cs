@@ -34,7 +34,7 @@ public abstract class IndexTests
 
         public string GetSearchText() => $"{Title} {Content}";
     }
-
+    
     [Fact]
     public async Task IndexAsync_SingleDocument_ShouldSucceed()
     {
