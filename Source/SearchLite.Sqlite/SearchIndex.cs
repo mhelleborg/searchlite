@@ -1,10 +1,11 @@
 ﻿using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
 namespace SearchLite.Sqlite;
 
-public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
+public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocument
 {
     private readonly string _connectionString;
     private readonly SearchManager _manager;
@@ -110,6 +111,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
                 await docCmd.ExecuteNonQueryAsync(ct);
             }
         }, ct);
+
     public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
@@ -186,7 +188,7 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         {
             return $"LIMIT {request.Options.Skip}, {request.Options.Take}";
         }
-        
+
         return $"LIMIT {request.Options.Take}";
     }
 
@@ -332,53 +334,54 @@ public sealed class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocume
         }
     }
 
-private Task EnsureTableExistsAsync(CancellationToken cancellationToken)
-{
-    return SerializedWrite(async transaction =>
+    private Task EnsureTableExistsAsync(CancellationToken cancellationToken)
     {
-        var mainTableSql = $"""
-                            CREATE TABLE IF NOT EXISTS {TableName} (
-                                id TEXT PRIMARY KEY NOT NULL,
-                                document TEXT NOT NULL,
-                                search_text TEXT NOT NULL,
-                                last_updated DATETIME NOT NULL default (datetime('now', 'utc'))
-                            );
-                            """;
+        return SerializedWrite(async transaction =>
+        {
+            var mainTableSql = $"""
+                                CREATE TABLE IF NOT EXISTS {TableName} (
+                                    id TEXT PRIMARY KEY NOT NULL,
+                                    document TEXT NOT NULL,
+                                    search_text TEXT NOT NULL,
+                                    last_updated DATETIME NOT NULL default (datetime('now', 'utc'))
+                                );
+                                """;
 
-        await using var mainTableCmd = new SqliteCommand(mainTableSql, transaction.Connection, transaction);
-        await mainTableCmd.ExecuteNonQueryAsync(cancellationToken);
+            await using var mainTableCmd = new SqliteCommand(mainTableSql, transaction.Connection, transaction);
+            await mainTableCmd.ExecuteNonQueryAsync(cancellationToken);
 
-        // Create FTS table
-        var ftsTableSql = $"""
-                           CREATE VIRTUAL TABLE IF NOT EXISTS {FtsTableName} USING fts5(id, search_text);
-                           """;
+            // Create FTS table
+            var ftsTableSql = $"""
+                               CREATE VIRTUAL TABLE IF NOT EXISTS {FtsTableName} USING fts5(id, search_text);
+                               """;
 
-        await using var ftsTableCmd = new SqliteCommand(ftsTableSql, transaction.Connection, transaction);
-        await ftsTableCmd.ExecuteNonQueryAsync(cancellationToken);
+            await using var ftsTableCmd = new SqliteCommand(ftsTableSql, transaction.Connection, transaction);
+            await ftsTableCmd.ExecuteNonQueryAsync(cancellationToken);
 
-        // Create triggers to maintain FTS index
-        var triggersSql = $"""
-                           -- Trigger for INSERT
-                           CREATE TRIGGER IF NOT EXISTS {TableName}_ai AFTER INSERT ON {TableName} BEGIN
-                               INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
-                           END;
+            // Create triggers to maintain FTS index
+            var triggersSql = $"""
+                               -- Trigger for INSERT
+                               CREATE TRIGGER IF NOT EXISTS {TableName}_ai AFTER INSERT ON {TableName} BEGIN
+                                   INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
+                               END;
 
-                           -- Trigger for UPDATE
-                           CREATE TRIGGER IF NOT EXISTS {TableName}_au AFTER UPDATE ON {TableName} BEGIN
-                               DELETE FROM {FtsTableName} WHERE id = old.id;
-                               INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
-                           END;
+                               -- Trigger for UPDATE
+                               CREATE TRIGGER IF NOT EXISTS {TableName}_au AFTER UPDATE ON {TableName} BEGIN
+                                   DELETE FROM {FtsTableName} WHERE id = old.id;
+                                   INSERT INTO {FtsTableName}(id, search_text) VALUES (new.id, new.search_text);
+                               END;
 
-                           -- Trigger for DELETE
-                           CREATE TRIGGER IF NOT EXISTS {TableName}_ad AFTER DELETE ON {TableName} BEGIN
-                               DELETE FROM {FtsTableName} WHERE id = old.id;
-                           END;
-                           """;
+                               -- Trigger for DELETE
+                               CREATE TRIGGER IF NOT EXISTS {TableName}_ad AFTER DELETE ON {TableName} BEGIN
+                                   DELETE FROM {FtsTableName} WHERE id = old.id;
+                               END;
+                               """;
 
-        await using var triggersCmd = new SqliteCommand(triggersSql, transaction.Connection, transaction);
-        await triggersCmd.ExecuteNonQueryAsync(cancellationToken);
-    }, cancellationToken);
-}
+            await using var triggersCmd = new SqliteCommand(triggersSql, transaction.Connection, transaction);
+            await triggersCmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
+    }
+
     private static string? BuildOrderByClause(SearchRequest<T> request)
     {
         if (request.OrderBys.Count == 0)
@@ -395,8 +398,6 @@ private Task EnsureTableExistsAsync(CancellationToken cancellationToken)
 
         return $"ORDER BY {string.Join(", ", orderClauses)}";
     }
-
-    public static string GetTableName(string collectionName) => $"SearchLite_{typeof(T).Name}_{collectionName}";
 
     private static SqliteParameter CreateMatchParameter(string query, bool includePartialMatches)
     {
@@ -422,4 +423,27 @@ private Task EnsureTableExistsAsync(CancellationToken cancellationToken)
         // Wrap the entire query in double quotes
         return $"\"{escaped}\"";
     }
+
+    public static string GetTableName(string collectionName)
+    {
+        var sanitizedTypeName = IdentifierRegex().Replace(typeof(T).Name, "").ToLowerInvariant();
+        collectionName = IdentifierRegex().Replace(collectionName, "").TrimEnd('_').ToLowerInvariant();
+
+        var budget = 128 - collectionName.Length - 11;
+
+        if (budget > 0 && sanitizedTypeName.Length > budget)
+        {
+            sanitizedTypeName = sanitizedTypeName[..budget];
+        }
+
+        var sanitized = $"searchlite_{sanitizedTypeName}_{collectionName}";
+        if (sanitized.Length > 128)
+        {
+            sanitized = sanitized[..128];
+        }
+        return sanitized;
+    }
+
+    [GeneratedRegex(@"[^a-zA-Z0-9_]")]
+    private static partial Regex IdentifierRegex();
 }
