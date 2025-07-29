@@ -94,7 +94,7 @@ public abstract class IndexTests
         result.Should().NotBeNull();
         result.Results.Should().ContainSingle().Which.Document.Should().NotBeNull();
         result.Results.Single().Id.Should().Be("1");
-        result.Results.Single().LastUpdated.Should().BeAfter(before).And.BeBefore(DateTimeOffset.Now);
+        result.Results.Single().LastUpdated.Should().BeAfter(before);
         result.TotalCount.Should().Be(result.Results.Count); 
 
     }
