@@ -84,6 +84,25 @@ public static class FilterMapper
             var propertyInfo = (PropertyInfo)memberExpression.Member;
             var value = Expression.Lambda(node.Right).Compile().DynamicInvoke();
 
+            // Handle null comparisons specially
+            if (value == null)
+            {
+                var nullOperator = node.NodeType switch
+                {
+                    ExpressionType.Equal => Operator.IsNull,
+                    ExpressionType.NotEqual => Operator.IsNotNull,
+                    _ => throw new NotSupportedException($"Null comparison with operator {node.NodeType} is not supported")
+                };
+
+                return new FilterNode<T>.Condition
+                {
+                    PropertyName = propertyInfo.Name,
+                    PropertyType = propertyInfo.PropertyType,
+                    Operator = nullOperator,
+                    Value = true // Use true as a placeholder since we don't need the actual value for null checks
+                };
+            }
+
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,

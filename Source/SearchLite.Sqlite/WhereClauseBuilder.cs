@@ -62,6 +62,12 @@ public static class WhereClauseBuilder<T>
     private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
         List<SqliteParameter> parameters)
     {
+        // Handle null checks first
+        if (IsNullOperator(condition.Operator))
+        {
+            return BuildNullCondition(condition.PropertyName, condition.Operator);
+        }
+
         // Handle string null/empty checks differently
         if (IsStringNullOrEmptyOperator(condition.Operator))
         {
@@ -111,6 +117,23 @@ public static class WhereClauseBuilder<T>
     {
         return op is Operator.IsNullOrEmpty or Operator.IsNotNullOrEmpty or 
                      Operator.IsNullOrWhiteSpace or Operator.IsNotNullOrWhiteSpace;
+    }
+
+    private static bool IsNullOperator(Operator op)
+    {
+        return op is Operator.IsNull or Operator.IsNotNull;
+    }
+
+    private static string BuildNullCondition(string propertyName, Operator op)
+    {
+        var fieldExpression = $"json_extract(document, '$.{propertyName}')";
+        
+        return op switch
+        {
+            Operator.IsNull => $"{fieldExpression} IS NULL",
+            Operator.IsNotNull => $"{fieldExpression} IS NOT NULL",
+            _ => throw new NotSupportedException($"Null operator {op} is not supported")
+        };
     }
 
     private static string BuildStringNullOrEmptyCondition(string propertyName, Operator op)

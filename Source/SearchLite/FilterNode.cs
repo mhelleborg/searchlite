@@ -28,7 +28,9 @@ public enum Operator
     IsNullOrEmpty,
     IsNotNullOrEmpty,
     IsNullOrWhiteSpace,
-    IsNotNullOrWhiteSpace
+    IsNotNullOrWhiteSpace,
+    IsNull,
+    IsNotNull
 }
 
 public enum LogicalOperator

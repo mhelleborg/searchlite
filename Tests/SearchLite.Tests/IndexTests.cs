@@ -796,6 +796,90 @@ public abstract class IndexTests
     }
 
     [Fact]
+    public async Task SearchAsync_WithCompositeExpressionIncludingNull_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "Not it",
+                Description = null,
+                Views = 100
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "it",
+                Description = "",
+                Views = 200
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "it",
+                Description = "But has a description",
+                Views = 50
+            },
+            new TestDocument
+            {
+                Id = "4",
+                Title = "it",
+                Description = null,
+                Views = 300
+            }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Find documents where Description is null/empty OR Views > 250
+        var request = new SearchRequest<TestDocument>().Where(d =>
+            d.Description == null && d.Title == "it");
+        var result = await Index.SearchAsync(request);
+
+        // Assert - Should get only doc 4 (null description + title == "it")
+        result.Results.Should().HaveCount(1);
+        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "4" });
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithNotNullComparison_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "Has description",
+                Description = "Some content"
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Null description",
+                Description = null
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Empty description",
+                Description = ""
+            }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Find documents where Description is NOT null
+        var request = new SearchRequest<TestDocument>().Where(d => d.Description != null);
+        var result = await Index.SearchAsync(request);
+
+        // Assert - Should get docs 1 and 3 (non-null descriptions)
+        result.Results.Should().HaveCount(2);
+        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "1", "3" });
+    }
+
+    
+    [Fact]
     public async Task SearchAsync_WithComplexCompositeExpression_ShouldFilterCorrectly()
     {
         // Arrange
