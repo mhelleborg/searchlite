@@ -49,7 +49,20 @@ public interface ISearchIndex<T> where T : ISearchableDocument
     /// <returns></returns>
     Task ClearAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Count all documents in the index
+    /// </summary>
+    /// <param name="ct"></param>
+  /// <returns>The total number of documents in the index</returns>
     Task<long> CountAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Count documents in the index that match the specified filters
+    /// </summary>
+    /// <param name="request">The search request containing filters</param>
+    /// <param name="ct"></param>
+    /// <returns>The number of documents matching the filters</returns>
+    Task<long> CountAsync(SearchRequest<T> request, CancellationToken ct = default);
 
     /// <summary>
     /// Delete the index

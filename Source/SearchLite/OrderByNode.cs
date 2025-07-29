@@ -1,4 +1,4 @@
-﻿namespace SearchLite;
+namespace SearchLite;
 
 public enum SortDirection
 {
@@ -8,6 +8,6 @@ public enum SortDirection
 
 public class OrderByNode<T>
 {
-    public string PropertyName { get; init; } = null!;
+    public string PropertyName { get; init; } = null !;
     public SortDirection Direction { get; init; }
 }

@@ -21,8 +21,8 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
         get
         {
             if (_threadLocalConnection.Value == null)
-            {
-                var connection = new SqliteConnection(_connectionString);
+            { 
+                var connection = new SqliteConnection(_connectionString); 
                 connection.Open();
                 _threadLocalConnection.Value = connection;
             }
@@ -251,11 +251,11 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
             SearchTime = sw.Elapsed
         };
     }
-
+    
     public Task DeleteAsync(string id, CancellationToken ct = default) =>
         SerializedWrite(async transaction =>
         {
-            // Delete from main table (FTS will be automatically updated due to triggers)
+            // Delete from the main table (FTS will be automatically updated due to triggers)
             var sql = $"DELETE FROM {TableName} WHERE id = @id";
 
             await using var cmd = new SqliteCommand(sql, transaction.Connection, transaction);
@@ -278,11 +278,22 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
     public async Task<long> CountAsync(CancellationToken ct = default)
     {
         var sql = $"SELECT COUNT(*) FROM {TableName}";
-
-
         await using var cmd = new SqliteCommand(sql, Connection);
         var result = await cmd.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(result);
+    }
 
+    public async Task<long> CountAsync(SearchRequest<T> request, CancellationToken ct = default)
+    {
+        var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
+        var sql = $"""
+                   SELECT COUNT(*)
+                   FROM {TableName} m
+                   {clauses.ToWhereClause()}
+                   """;
+        await using var cmd = new SqliteCommand(sql, Connection);
+        cmd.AddParameters(clauses);
+        var result = await cmd.ExecuteScalarAsync(ct);
         return Convert.ToInt64(result);
     }
 

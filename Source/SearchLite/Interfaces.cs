@@ -6,6 +6,7 @@ public interface ISearchableDocument
     string GetSearchText();
 }
 
+
 public class SearchResult<T>
 {
     public required string Id { get; init; }

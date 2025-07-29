@@ -262,6 +262,23 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
         return Convert.ToInt64(result);
     }
 
+    public async Task<long> CountAsync(SearchRequest<T> request, CancellationToken cancellationToken = default)
+    {
+        await using var conn = await CreateConnectionAsync(cancellationToken);
+        var clauses = BuildWhereClauses(request);
+        var query = request.Query ?? "";
+        var sql = $"""
+                   SELECT COUNT(*)
+                   FROM {TableName}, websearch_to_tsquery(@Query) query
+                   {clauses.ToWhereClause()}
+                   """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.Add(new NpgsqlParameter("@Query", query));
+        cmd.AddParameters(clauses);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt64(result);
+    }
+
     private static List<Clause> BuildWhereClauses(SearchRequest<T> request)
     {
         List<Clause> clauses = [];
