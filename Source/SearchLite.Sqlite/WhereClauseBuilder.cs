@@ -62,6 +62,12 @@ public static class WhereClauseBuilder<T>
     private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
         List<SqliteParameter> parameters)
     {
+        // Handle string null/empty checks differently
+        if (IsStringNullOrEmptyOperator(condition.Operator))
+        {
+            return BuildStringNullOrEmptyCondition(condition.PropertyName, condition.Operator);
+        }
+
         var sqliteType = GetSqliteType(condition.PropertyType);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"@p{paramCounter++}";
@@ -98,6 +104,27 @@ public static class WhereClauseBuilder<T>
             Operator.LessThan => "<",
             Operator.LessThanOrEqual => "<=",
             _ => throw new NotSupportedException($"Operator {op} is not supported")
+        };
+    }
+
+    private static bool IsStringNullOrEmptyOperator(Operator op)
+    {
+        return op is Operator.IsNullOrEmpty or Operator.IsNotNullOrEmpty or 
+                     Operator.IsNullOrWhiteSpace or Operator.IsNotNullOrWhiteSpace;
+    }
+
+    private static string BuildStringNullOrEmptyCondition(string propertyName, Operator op)
+    {
+        var fieldExpression = $"CAST(json_extract(document, '$.{propertyName}') AS TEXT)";
+        
+        return op switch
+        {
+            Operator.IsNullOrEmpty => $"({fieldExpression} IS NULL OR {fieldExpression} = '')",
+            Operator.IsNotNullOrEmpty => $"({fieldExpression} IS NOT NULL AND {fieldExpression} != '')",
+            // Use replace to handle various whitespace characters like .NET's IsNullOrWhiteSpace
+            Operator.IsNullOrWhiteSpace => $"({fieldExpression} IS NULL OR trim(replace(replace(replace({fieldExpression}, char(9), ' '), char(10), ' '), char(13), ' ')) = '')",
+            Operator.IsNotNullOrWhiteSpace => $"({fieldExpression} IS NOT NULL AND trim(replace(replace(replace({fieldExpression}, char(9), ' '), char(10), ' '), char(13), ' ')) != '')",
+            _ => throw new NotSupportedException($"String operator {op} is not supported")
         };
     }
 }

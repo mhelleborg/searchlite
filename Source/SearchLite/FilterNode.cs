@@ -24,7 +24,11 @@ public enum Operator
     GreaterThan,
     GreaterThanOrEqual,
     LessThan,
-    LessThanOrEqual
+    LessThanOrEqual,
+    IsNullOrEmpty,
+    IsNotNullOrEmpty,
+    IsNullOrWhiteSpace,
+    IsNotNullOrWhiteSpace
 }
 
 public enum LogicalOperator

@@ -248,6 +248,211 @@ public class FilterMapperTests
         result.Should().BeEquivalentTo(expected);
     }
 
+    [Fact]
+    public void Map_WithDeepNestedExpressions_ShouldReturnCorrectNestedStructure()
+    {
+        // Test deeper nesting: (A && B) || (C && (D || E))
+        Expression<Func<TestEntity, bool>> predicate = x =>
+            (x.Age > 30 && x.Name == "John") || 
+            (x.IsActive && (x.Age < 20 || x.Name == "Jane"));
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Group
+        {
+            Operator = LogicalOperator.Or,
+            Conditions =
+            [
+                new FilterNode<TestEntity>.Group
+                {
+                    Operator = LogicalOperator.And,
+                    Conditions =
+                    [
+                        new FilterNode<TestEntity>.Condition
+                        {
+                            PropertyName = "Age",
+                            PropertyType = typeof(int),
+                            Operator = Operator.GreaterThan,
+                            Value = 30
+                        },
+                        new FilterNode<TestEntity>.Condition
+                        {
+                            PropertyName = "Name",
+                            PropertyType = typeof(string),
+                            Operator = Operator.Equal,
+                            Value = "John"
+                        }
+                    ]
+                },
+                new FilterNode<TestEntity>.Group
+                {
+                    Operator = LogicalOperator.And,
+                    Conditions =
+                    [
+                        new FilterNode<TestEntity>.Condition
+                        {
+                            PropertyName = "IsActive",
+                            PropertyType = typeof(bool),
+                            Operator = Operator.Equal,
+                            Value = true
+                        },
+                        new FilterNode<TestEntity>.Group
+                        {
+                            Operator = LogicalOperator.Or,
+                            Conditions =
+                            [
+                                new FilterNode<TestEntity>.Condition
+                                {
+                                    PropertyName = "Age",
+                                    PropertyType = typeof(int),
+                                    Operator = Operator.LessThan,
+                                    Value = 20
+                                },
+                                new FilterNode<TestEntity>.Condition
+                                {
+                                    PropertyName = "Name",
+                                    PropertyType = typeof(string),
+                                    Operator = Operator.Equal,
+                                    Value = "Jane"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithComplexTripleNestedExpression_ShouldReturnCorrectStructure()
+    {
+        // Test: ((A && B) || C) && (D || (E && F))
+        Expression<Func<TestEntity, bool>> predicate = x =>
+            ((x.Age > 30 && x.Name == "John") || x.IsActive) && 
+            (x.Age < 50 || (x.Name != "Bob" && x.IsActive));
+        
+        var result = FilterMapper.Map(predicate);
+        
+        result.Should().BeOfType<FilterNode<TestEntity>.Group>();
+        var rootGroup = (FilterNode<TestEntity>.Group)result;
+        rootGroup.Operator.Should().Be(LogicalOperator.And);
+        rootGroup.Conditions.Should().HaveCount(2);
+        
+        // First condition should be: (Age > 30 && Name == "John") || IsActive
+        var firstCondition = rootGroup.Conditions[0].Should().BeOfType<FilterNode<TestEntity>.Group>().Subject;
+        firstCondition.Operator.Should().Be(LogicalOperator.Or);
+        
+        // Second condition should be: Age < 50 || (Name != "Bob" && IsActive)
+        var secondCondition = rootGroup.Conditions[1].Should().BeOfType<FilterNode<TestEntity>.Group>().Subject;
+        secondCondition.Operator.Should().Be(LogicalOperator.Or);
+    }
+
+    [Fact]
+    public void Map_WithStringIsNullOrEmpty_ShouldReturnIsNullOrEmptyOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => string.IsNullOrEmpty(x.Name);
+        
+        Action act = () => FilterMapper.Map(predicate);
+        
+        // This should work once we implement string.IsNullOrEmpty support
+        act.Should().NotThrow();
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.IsNullOrEmpty,
+            Value = true
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringIsNullOrEmpty_ShouldReturnNotIsNullOrEmptyOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !string.IsNullOrEmpty(x.Name);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.IsNotNullOrEmpty,
+            Value = true
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringIsNullOrWhiteSpace_ShouldReturnIsNullOrWhiteSpaceOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => string.IsNullOrWhiteSpace(x.Name);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.IsNullOrWhiteSpace,
+            Value = true
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringIsNullOrWhiteSpace_ShouldReturnNotIsNullOrWhiteSpaceOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !string.IsNullOrWhiteSpace(x.Name);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.IsNotNullOrWhiteSpace,
+            Value = true
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringIsNullOrEmptyInComplexExpression_ShouldWorkCorrectly()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => 
+            x.Age > 25 && (string.IsNullOrEmpty(x.Name) || x.IsActive);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        result.Should().BeOfType<FilterNode<TestEntity>.Group>();
+        var rootGroup = (FilterNode<TestEntity>.Group)result;
+        rootGroup.Operator.Should().Be(LogicalOperator.And);
+        rootGroup.Conditions.Should().HaveCount(2);
+        
+        // First condition: Age > 25
+        var firstCondition = rootGroup.Conditions[0].Should().BeOfType<FilterNode<TestEntity>.Condition>().Subject;
+        firstCondition.PropertyName.Should().Be("Age");
+        firstCondition.Operator.Should().Be(Operator.GreaterThan);
+        
+        // Second condition: string.IsNullOrEmpty(Name) || IsActive
+        var secondCondition = rootGroup.Conditions[1].Should().BeOfType<FilterNode<TestEntity>.Group>().Subject;
+        secondCondition.Operator.Should().Be(LogicalOperator.Or);
+        
+        var nameNullCheck = secondCondition.Conditions[0].Should().BeOfType<FilterNode<TestEntity>.Condition>().Subject;
+        nameNullCheck.PropertyName.Should().Be("Name");
+        nameNullCheck.Operator.Should().Be(Operator.IsNullOrEmpty);
+    }
+
     private class TestEntity
     {
         public int Age { get; set; }

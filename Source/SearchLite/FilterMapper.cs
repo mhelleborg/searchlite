@@ -38,6 +38,10 @@ public static class FilterMapper
                     VisitComparisonBinary(binary),
                 MemberExpression member when member.Type == typeof(bool) =>
                     VisitBooleanMember(member),
+                MethodCallExpression method when IsStringNullOrEmptyMethod(method) =>
+                    VisitStringNullOrEmptyMethod(method),
+                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringNullOrEmptyMethod(method) =>
+                    VisitNegatedStringNullOrEmptyMethod(method),
                 ConstantExpression { Value: true } => 
                     new FilterNode<T>.Group { Operator = LogicalOperator.And, Conditions = new List<FilterNode<T>>() },
                 _ => throw new NotSupportedException($"Expression type {expression.NodeType} is not supported")
@@ -128,5 +132,54 @@ public static class FilterMapper
             ExpressionType.LessThanOrEqual => Operator.LessThanOrEqual,
             _ => throw new NotSupportedException($"Operator {type} is not supported")
         };
+
+        private bool IsStringNullOrEmptyMethod(MethodCallExpression method)
+        {
+            return method.Method.DeclaringType == typeof(string) &&
+                   (method.Method.Name == nameof(string.IsNullOrEmpty) ||
+                    method.Method.Name == nameof(string.IsNullOrWhiteSpace));
+        }
+
+        private FilterNode<T> VisitStringNullOrEmptyMethod(MethodCallExpression method)
+        {
+            if (method.Arguments.Count != 1 || method.Arguments[0] is not MemberExpression memberExpression)
+            {
+                throw new NotSupportedException($"Unsupported {method.Method.Name} usage");
+            }
+
+            var propertyInfo = (PropertyInfo)memberExpression.Member;
+            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty) 
+                ? Operator.IsNullOrEmpty 
+                : Operator.IsNullOrWhiteSpace;
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = propertyInfo.Name,
+                PropertyType = propertyInfo.PropertyType,
+                Operator = operatorType,
+                Value = true
+            };
+        }
+
+        private FilterNode<T> VisitNegatedStringNullOrEmptyMethod(MethodCallExpression method)
+        {
+            if (method.Arguments.Count != 1 || method.Arguments[0] is not MemberExpression memberExpression)
+            {
+                throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage");
+            }
+
+            var propertyInfo = (PropertyInfo)memberExpression.Member;
+            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty) 
+                ? Operator.IsNotNullOrEmpty 
+                : Operator.IsNotNullOrWhiteSpace;
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = propertyInfo.Name,
+                PropertyType = propertyInfo.PropertyType,
+                Operator = operatorType,
+                Value = true
+            };
+        }
     }
 }
