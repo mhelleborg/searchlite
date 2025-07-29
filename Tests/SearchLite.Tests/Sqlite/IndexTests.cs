@@ -3,7 +3,7 @@ using SearchLite.Sqlite;
 
 namespace SearchLite.Tests.Sqlite;
 
-public class IndexTests() : Tests.IndexTests(new SearchManager("Data Source=sharedmemdb;Mode=Memory;Cache=Shared"))
+public class IndexTests() : Tests.IndexTests(new SearchManager($"Data Source={Path.GetTempFileName()};"))
 {
     [Theory]
     [InlineData(0, 1)]
