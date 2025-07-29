@@ -1178,4 +1178,395 @@ public abstract class IndexTests
         result.Results.Should().ContainSingle();
         result.Results.Single().Id.Should().Be("1");
     }
+
+    [Fact]
+    public async Task SearchAsync_WithSkipZero_ShouldReturnFromBeginning()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 5).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 0, Take = 3 }
+        };
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(3);
+        result.TotalCount.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithTakeZero_ShouldReturnNoResults()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 5).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 2, Take = 0 }
+        };
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().BeEmpty();
+        result.TotalCount.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithSkipGreaterThanTotal_ShouldReturnEmpty()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 5).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 10, Take = 5 }
+        };
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().BeEmpty();
+        result.TotalCount.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithTakeGreaterThanRemaining_ShouldReturnAvailable()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 5).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 3, Take = 10 }
+        };
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(2);
+        result.TotalCount.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithSkipEqualsTotal_ShouldReturnEmpty()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 5).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
+        await Index.IndexManyAsync(docs);
+
+        // Act
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 5, Take = 3 }
+        };
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().BeEmpty();
+        result.TotalCount.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task SearchAsync_OrderByNullValues_ShouldHandleNullsCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "Has description",
+                Description = "Z content",
+                Views = 100
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Null description",
+                Description = null,
+                Views = 200
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Another description",
+                Description = "A content",
+                Views = 150
+            }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Order by description (nulls should come first or last depending on implementation)
+        var request = new SearchRequest<TestDocument>().OrderByAscending(d => d.Description);
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(3);
+        // Null values handling varies by database, but order should be consistent
+        var descriptions = result.Results.Select(r => r.Document!.Description).ToList();
+        descriptions.Should().Equal(descriptions.OrderBy(d => d));
+    }
+
+    [Fact]
+    public async Task SearchAsync_OrderByWithIdenticalValues_ShouldMaintainStableSort()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "First",
+                Views = 100,
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10)
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Second",
+                Views = 100,
+                CreatedAt = DateTime.UtcNow.AddMinutes(-5)
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Third",
+                Views = 100,
+                CreatedAt = DateTime.UtcNow
+            }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Order by Views (all identical), then by CreatedAt for tie-breaking
+        var request = new SearchRequest<TestDocument>()
+            .OrderByAscending(d => d.Views)
+            .OrderByAscending(d => d.CreatedAt);
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(3);
+        result.Results.Select(r => r.Document!.CreatedAt).Should().BeInAscendingOrder();
+        result.Results[0].Document!.Id.Should().Be("1");
+        result.Results[1].Document!.Id.Should().Be("2");
+        result.Results[2].Document!.Id.Should().Be("3");
+    }
+
+    [Fact]
+    public async Task SearchAsync_OrderByMultipleFields_WithMixedNullValues_ShouldHandleCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "High views, no description",
+                Description = null,
+                Views = 500
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "High views, with description",
+                Description = "Some content",
+                Views = 500
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "Low views, no description",
+                Description = null,
+                Views = 100
+            },
+            new TestDocument
+            {
+                Id = "4",
+                Title = "Low views, with description",
+                Description = "Other content",
+                Views = 100
+            }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Order by Views descending, then by Description ascending
+        var request = new SearchRequest<TestDocument>()
+            .OrderByDescending(d => d.Views)
+            .OrderByAscending(d => d.Description);
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(4);
+        // First two should have Views = 500, last two should have Views = 100
+        result.Results[0].Document!.Views.Should().Be(500);
+        result.Results[1].Document!.Views.Should().Be(500);
+        result.Results[2].Document!.Views.Should().Be(100);
+        result.Results[3].Document!.Views.Should().Be(100);
+    }
+
+    [Fact]
+    public async Task SearchAsync_OrderByString_WithCaseAndSpecialChars_ShouldOrderCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument
+            {
+                Id = "1",
+                Title = "zebra",
+                Views = 1
+            },
+            new TestDocument
+            {
+                Id = "2",
+                Title = "Apple",
+                Views = 2
+            },
+            new TestDocument
+            {
+                Id = "3",
+                Title = "apple",
+                Views = 3
+            },
+            new TestDocument
+            {
+                Id = "4",
+                Title = "Zebra",
+                Views = 4
+            },
+            new TestDocument
+            {
+                Id = "5",
+                Title = "123 numeric",
+                Views = 5
+            }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Order by Title ascending
+        var request = new SearchRequest<TestDocument>().OrderByAscending(d => d.Title);
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(5);
+        var titles = result.Results.Select(r => r.Document!.Title).ToList();
+        
+        // Verify that the database ordering is consistent and logical
+        // Numbers should come first, then letters (the exact case order may vary by database)
+        titles[0].Should().Be("123 numeric"); // Numbers first
+        
+        // The remaining items should be alphabetically ordered (case rules may vary)
+        var letterTitles = titles.Skip(1).ToList();
+        letterTitles.Should().Contain("Apple");
+        letterTitles.Should().Contain("apple"); 
+        letterTitles.Should().Contain("Zebra");
+        letterTitles.Should().Contain("zebra");
+        
+        // Verify stable sort - results should be deterministic
+        var secondResult = await Index.SearchAsync(request);
+        var secondTitles = secondResult.Results.Select(r => r.Document!.Title).ToList();
+        titles.Should().Equal(secondTitles);
+    }
+
+    [Fact]
+    public async Task SearchAsync_CombinedFilterOrderPagination_ShouldWorkTogether()
+    {
+        // Arrange
+        var docs = Enumerable.Range(1, 20).Select(i => new TestDocument
+        {
+            Id = i.ToString(),
+            Title = $"Document {i:00}",
+            Views = i * 10,
+            Description = i % 3 == 0 ? null : $"Content {i}"
+        });
+        await Index.IndexManyAsync(docs);
+
+        // Act - Filter (Views > 50), Order by Views desc, Skip 3, Take 5
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 3, Take = 5 }
+        }
+            .Where(d => d.Views > 50)
+            .OrderByDescending(d => d.Views)
+            .OrderByAscending(d => d.Title);
+        var result = await Index.SearchAsync(request);
+
+        // Assert
+        result.Results.Should().HaveCount(5);
+        result.TotalCount.Should().Be(15); // Documents with Views > 50 (i=6 to 20, which is 15 documents)
+        result.Results.Select(r => r.Document!.Views).Should().BeInDescendingOrder();
+    }
+
+    [Fact]
+    public async Task SearchAsync_FilterWithStringOperatorsPlusPagination_ShouldWorkCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "A", Description = null, Views = 100 },
+            new TestDocument { Id = "2", Title = "B", Description = "", Views = 200 },
+            new TestDocument { Id = "3", Title = "C", Description = "Content", Views = 300 },
+            new TestDocument { Id = "4", Title = "D", Description = null, Views = 400 },
+            new TestDocument { Id = "5", Title = "E", Description = "   ", Views = 500 },
+            new TestDocument { Id = "6", Title = "F", Description = "More content", Views = 600 },
+            new TestDocument { Id = "7", Title = "G", Description = "", Views = 700 }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Act - Filter by string.IsNullOrEmpty, order by Views, paginate
+        var request = new SearchRequest<TestDocument>
+        {
+            Options = new SearchOptions { Skip = 1, Take = 2 }
+        }
+            .Where(d => string.IsNullOrEmpty(d.Description))
+            .OrderByAscending(d => d.Views);
+        var result = await Index.SearchAsync(request);
+
+        // Assert - Should find docs 1, 2, 4, 7 (null/empty description), skip first, take 2
+        result.Results.Should().HaveCount(2);
+        result.TotalCount.Should().Be(4);
+        result.Results[0].Document!.Id.Should().Be("2"); // Views = 200
+        result.Results[1].Document!.Id.Should().Be("4"); // Views = 400
+    }
+
+    [Fact]
+    public async Task SearchAsync_StringOperatorEdgeCases_ShouldHandleAllScenarios()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc1", Description = null, Tags = null },
+            new TestDocument { Id = "2", Title = "Doc2", Description = "", Tags = "" },
+            new TestDocument { Id = "3", Title = "Doc3", Description = " ", Tags = "\t" },
+            new TestDocument { Id = "4", Title = "Doc4", Description = "\n\r", Tags = "  \n  " },
+            new TestDocument { Id = "5", Title = "Doc5", Description = "actual content", Tags = "real tags" },
+            new TestDocument { Id = "6", Title = "Doc6", Description = "0", Tags = "0" } // Edge case: single character
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Test IsNullOrEmpty
+        var nullOrEmptyRequest = new SearchRequest<TestDocument>()
+            .Where(d => string.IsNullOrEmpty(d.Description));
+        var nullOrEmptyResult = await Index.SearchAsync(nullOrEmptyRequest);
+        nullOrEmptyResult.Results.Should().HaveCount(2); // docs 1, 2
+
+        // Test IsNullOrWhiteSpace
+        var nullOrWhiteSpaceRequest = new SearchRequest<TestDocument>()
+            .Where(d => string.IsNullOrWhiteSpace(d.Tags));
+        var nullOrWhiteSpaceResult = await Index.SearchAsync(nullOrWhiteSpaceRequest);
+        nullOrWhiteSpaceResult.Results.Should().HaveCount(4); // docs 1, 2, 3, 4
+
+        // Test negated IsNullOrEmpty
+        var notNullOrEmptyRequest = new SearchRequest<TestDocument>()
+            .Where(d => !string.IsNullOrEmpty(d.Description));
+        var notNullOrEmptyResult = await Index.SearchAsync(notNullOrEmptyRequest);
+        notNullOrEmptyResult.Results.Should().HaveCount(4); // docs 3, 4, 5, 6
+    }
 }

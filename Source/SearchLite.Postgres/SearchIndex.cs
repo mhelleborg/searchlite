@@ -153,14 +153,39 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
         cmd.Parameters.Add(new NpgsqlParameter("@Query", query));
         cmd.Parameters.AddWithValue("minScore", request.Options.MinScore);
         cmd.AddParameters(clauses);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
-            var score = reader.GetFloat(2);
-            maxScore = Math.Max(maxScore, score);
-            totalCount = reader.GetInt32(3);
-            var json = reader.GetString(1);
-            results.Add(new SearchResult<T> { Id = reader.GetString(0), LastUpdated = reader.GetDateTime(4), Score = score, Document = request.Options.IncludeRawDocument && !string.IsNullOrEmpty(json) ? JsonSerializer.Deserialize<T>(json) : default });
+            while (await reader.ReadAsync(ct))
+            {
+                var score = reader.GetFloat(2);
+                maxScore = Math.Max(maxScore, score);
+                totalCount = reader.GetInt32(3);
+                var json = reader.GetString(1);
+                results.Add(new SearchResult<T> { Id = reader.GetString(0), LastUpdated = reader.GetDateTime(4), Score = score, Document = request.Options.IncludeRawDocument && !string.IsNullOrEmpty(json) ? JsonSerializer.Deserialize<T>(json) : default });
+            }
+        }
+
+        // If no results were returned, we need to get the total count separately
+        if (results.Count == 0)
+        {
+            var countSql = $"""
+                           WITH ranked_docs AS (
+                              SELECT id, ts_rank(search_vector, websearch_to_tsquery(@Query)) as rank
+                              FROM {TableName}, websearch_to_tsquery(@Query) query
+                              {clauses.ToWhereClause()}
+                           )
+                           SELECT COUNT(*) as total
+                           FROM ranked_docs
+                           WHERE rank >= @minScore
+                           """;
+
+            await using var countCmd = new NpgsqlCommand(countSql, conn);
+            countCmd.Parameters.Add(new NpgsqlParameter("@Query", query));
+            countCmd.Parameters.AddWithValue("minScore", request.Options.MinScore);
+            countCmd.AddParameters(clauses);
+
+            var countResult = await countCmd.ExecuteScalarAsync(ct);
+            totalCount = Convert.ToInt32(countResult);
         }
 
         return new SearchResponse<T>

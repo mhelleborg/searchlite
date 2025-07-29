@@ -173,6 +173,34 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
             });
         }
 
+        // If no results were returned, we need to get the total count separately
+        if (results.Count == 0)
+        {
+            var countSql = $"""
+                           WITH ranked_docs AS (
+                               SELECT m.id as id, fts.rank * -1 as rank
+                               FROM {TableName} m
+                               RIGHT JOIN (
+                                   SELECT id, rank
+                                   FROM {FtsTableName}
+                                   WHERE {FtsTableName} MATCH @Query
+                               ) fts ON m.id = fts.id
+                               {clauses.ToWhereClause()}
+                           )
+                           SELECT COUNT(*) as total
+                           FROM ranked_docs
+                           WHERE rank >= @minScore
+                           """;
+
+            await using var countCmd = new SqliteCommand(countSql, Connection);
+            countCmd.Parameters.Add(CreateMatchParameter(request.Query, request.Options.IncludePartialMatches));
+            countCmd.Parameters.AddWithValue("@minScore", request.Options.MinScore);
+            countCmd.AddParameters(clauses);
+
+            var countResult = await countCmd.ExecuteScalarAsync(ct);
+            totalCount = Convert.ToInt32(countResult);
+        }
+
         return new SearchResponse<T>
         {
             Results = results,
@@ -241,6 +269,22 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                     ? JsonSerializer.Deserialize<T>(reader.GetString(2))
                     : default
             });
+        }
+
+        // If no results were returned, we need to get the total count separately
+        if (results.Count == 0)
+        {
+            var countSql = $"""
+                           SELECT COUNT(*) as total
+                           FROM {TableName} m
+                           {clauses.ToWhereClause()}
+                           """;
+
+            await using var countCmd = new SqliteCommand(countSql, Connection);
+            countCmd.AddParameters(clauses);
+
+            var countResult = await countCmd.ExecuteScalarAsync(ct);
+            totalCount = Convert.ToInt32(countResult);
         }
 
         return new SearchResponse<T>
