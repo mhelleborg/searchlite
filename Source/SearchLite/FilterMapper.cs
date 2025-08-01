@@ -32,7 +32,7 @@ public static class FilterMapper
         {
             return expression switch
             {
-                BinaryExpression binary when binary.NodeType is ExpressionType.AndAlso or ExpressionType.OrElse => 
+                BinaryExpression { NodeType: ExpressionType.AndAlso or ExpressionType.OrElse } binary => 
                     VisitLogicalBinary(binary),
                 BinaryExpression binary when IsComparisonOperator(binary.NodeType) => 
                     VisitComparisonBinary(binary),
@@ -42,6 +42,10 @@ public static class FilterMapper
                     VisitStringNullOrEmptyMethod(method),
                 UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringNullOrEmptyMethod(method) =>
                     VisitNegatedStringNullOrEmptyMethod(method),
+                MethodCallExpression method when IsSetOperatorMethod(method) =>
+                    VisitSetOperatorMethod(method),
+                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsSetOperatorMethod(method) =>
+                    VisitNegatedSetOperatorMethod(method),
                 ConstantExpression { Value: true } => 
                     new FilterNode<T>.Group { Operator = LogicalOperator.And, Conditions = new List<FilterNode<T>>() },
                 _ => throw new NotSupportedException($"Expression type {expression.NodeType} is not supported")
@@ -155,8 +159,7 @@ public static class FilterMapper
         private bool IsStringNullOrEmptyMethod(MethodCallExpression method)
         {
             return method.Method.DeclaringType == typeof(string) &&
-                   (method.Method.Name == nameof(string.IsNullOrEmpty) ||
-                    method.Method.Name == nameof(string.IsNullOrWhiteSpace));
+                   method.Method.Name is nameof(string.IsNullOrEmpty) or nameof(string.IsNullOrWhiteSpace);
         }
 
         private FilterNode<T> VisitStringNullOrEmptyMethod(MethodCallExpression method)
@@ -199,6 +202,149 @@ public static class FilterMapper
                 Operator = operatorType,
                 Value = true
             };
+        }
+
+        private bool IsSetOperatorMethod(MethodCallExpression method)
+        {
+            // Handle string.Contains
+            if (method.Method.DeclaringType == typeof(string) && method.Method.Name == nameof(string.Contains))
+                return true;
+
+            // Handle collection.Contains (for IEnumerable<T>.Contains extension method)
+            if (method.Method.Name == nameof(Enumerable.Contains) && method.Method.DeclaringType == typeof(Enumerable))
+                return true;
+
+            // Handle list/collection.Contains (instance method) - check for Contains method name
+            if (method.Method.Name == "Contains")
+                return true;
+
+            return false;
+        }
+
+        private FilterNode<T> VisitSetOperatorMethod(MethodCallExpression method)
+        {
+            // Handle string.Contains
+            if (method.Method.DeclaringType == typeof(string) && method.Method.Name == nameof(string.Contains))
+            {
+                if (method.Object is not MemberExpression memberExpression)
+                {
+                    throw new NotSupportedException("Unsupported string.Contains usage - property must be on the left side");
+                }
+
+                var propertyInfo = (PropertyInfo)memberExpression.Member;
+                var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+
+                return new FilterNode<T>.Condition
+                {
+                    PropertyName = propertyInfo.Name,
+                    PropertyType = propertyInfo.PropertyType,
+                    Operator = Operator.Contains,
+                    Value = value!
+                };
+            }
+
+            // Handle collection.Contains (both static Enumerable.Contains and instance Contains)
+            MemberExpression? targetMember = null;
+            object? collectionValue = null;
+
+            if (method.Method.Name == nameof(Enumerable.Contains) && method.Method.DeclaringType == typeof(Enumerable))
+            {
+                // Static Enumerable.Contains(collection, item)
+                if (method.Arguments.Count == 2 && method.Arguments[1] is MemberExpression member)
+                {
+                    targetMember = member;
+                    collectionValue = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+                }
+            }
+            else if (method.Method.Name == "Contains" && method.Method.DeclaringType?.FullName == "System.MemoryExtensions")
+            {
+                // MemoryExtensions.Contains (for Span<T>/ReadOnlySpan<T> operations on arrays)
+                if (method.Arguments.Count == 2 && method.Arguments[1] is MemberExpression member)
+                {
+                    targetMember = member;
+                    collectionValue = GetCollectionValue(method.Arguments[0]);
+                }
+            }
+            else if (method.Method.Name == "Contains" && method.Object != null)
+            {
+                // Instance collection.Contains(item)
+                if (method.Arguments.Count == 1 && method.Arguments[0] is MemberExpression member)
+                {
+                    targetMember = member;
+                    collectionValue = Expression.Lambda(method.Object).Compile().DynamicInvoke();
+                }
+            }
+            else if (method.Method.Name == "Contains")
+            {
+                // Handle extension method calls like array.Contains(x.Property)
+                // This is compiled as static method call: Contains(array, x.Property)
+                if (method.Arguments.Count == 2 && method.Arguments[1] is MemberExpression member)
+                {
+                    targetMember = member;
+                    collectionValue = GetCollectionValue(method.Arguments[0]);
+                }
+                // Handle instance method calls like list.Contains(x.Property) 
+                else if (method.Arguments.Count == 1 && method.Arguments[0] is MemberExpression member2 && method.Object != null)
+                {
+                    targetMember = member2;
+                    collectionValue = Expression.Lambda(method.Object).Compile().DynamicInvoke();
+                }
+            }
+
+            if (targetMember == null || collectionValue == null)
+            {
+                throw new NotSupportedException("Unsupported Contains usage - unable to extract property and collection");
+            }
+
+            var targetPropertyInfo = (PropertyInfo)targetMember.Member;
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = targetPropertyInfo.Name,
+                PropertyType = targetPropertyInfo.PropertyType,
+                Operator = Operator.In,
+                Value = collectionValue
+            };
+        }
+
+        private FilterNode<T> VisitNegatedSetOperatorMethod(MethodCallExpression method)
+        {
+            var positiveResult = VisitSetOperatorMethod(method);
+            if (positiveResult is FilterNode<T>.Condition condition)
+            {
+                var negatedOperator = condition.Operator switch
+                {
+                    Operator.Contains => Operator.NotContains,
+                    Operator.In => Operator.NotIn,
+                    _ => throw new NotSupportedException($"Cannot negate operator {condition.Operator}")
+                };
+
+                return new FilterNode<T>.Condition
+                {
+                    PropertyName = condition.PropertyName,
+                    PropertyType = condition.PropertyType,
+                    Operator = negatedOperator,
+                    Value = condition.Value
+                };
+            }
+
+            throw new NotSupportedException("Cannot negate non-condition result");
+        }
+
+        private static object? GetCollectionValue(Expression expression)
+        {
+            // Handle MethodCallExpression like op_Implicit(array)
+            if (expression is MethodCallExpression methodCall)
+            {
+                // If it's an implicit conversion from array to span, get the underlying array
+                if (methodCall.Method.Name == "op_Implicit" && methodCall.Arguments.Count == 1)
+                {
+                    return Expression.Lambda(methodCall.Arguments[0]).Compile().DynamicInvoke();
+                }
+            }
+            
+            // Default case - try to compile the expression directly
+            return Expression.Lambda(expression).Compile().DynamicInvoke();
         }
     }
 }

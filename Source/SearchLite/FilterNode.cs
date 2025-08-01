@@ -30,7 +30,11 @@ public enum Operator
     IsNullOrWhiteSpace,
     IsNotNullOrWhiteSpace,
     IsNull,
-    IsNotNull
+    IsNotNull,
+    Contains,
+    NotContains,
+    In,
+    NotIn
 }
 
 public enum LogicalOperator

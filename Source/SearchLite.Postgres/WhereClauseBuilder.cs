@@ -74,6 +74,12 @@ public static class WhereClauseBuilder<T>
             return BuildStringNullOrEmptyCondition(condition.PropertyName, condition.Operator);
         }
 
+        // Handle Contains and In operators
+        if (IsSetOperator(condition.Operator))
+        {
+            return BuildSetCondition(condition, ref paramCounter, parameters);
+        }
+
         var postgresType = GetPostgresType(condition.PropertyType);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"@p{paramCounter++}";
@@ -147,5 +153,66 @@ public static class WhereClauseBuilder<T>
             Operator.IsNotNullOrWhiteSpace => $"({fieldExpression} IS NOT NULL AND trim(replace(replace(replace({fieldExpression}, chr(9), ' '), chr(10), ' '), chr(13), ' ')) != '')",
             _ => throw new NotSupportedException($"String operator {op} is not supported")
         };
+    }
+
+    private static bool IsSetOperator(Operator op)
+    {
+        return op is Operator.Contains or Operator.NotContains or Operator.In or Operator.NotIn;
+    }
+
+    private static string BuildSetCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<NpgsqlParameter> parameters)
+    {
+        var fieldExpression = condition.PropertyType == typeof(string) 
+            ? $"(document->>'{condition.PropertyName}')::text"
+            : $"(document->>'{condition.PropertyName}'){GetPostgresType(condition.PropertyType)}";
+
+        return condition.Operator switch
+        {
+            Operator.Contains => BuildContainsCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotContains => $"NOT ({BuildContainsCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.In => BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            _ => throw new NotSupportedException($"Set operator {condition.Operator} is not supported")
+        };
+    }
+
+    private static string BuildContainsCondition(string fieldExpression, object value, ref int paramCounter, List<NpgsqlParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new NpgsqlParameter(paramName, $"%{value}%"));
+        return $"{fieldExpression} LIKE {paramName}";
+    }
+
+    private static string BuildInCondition(string fieldExpression, object value, ref int paramCounter, List<NpgsqlParameter> parameters)
+    {
+        // Handle collections (arrays, lists, etc.)
+        if (value is System.Collections.IEnumerable enumerable and not string)
+        {
+            var values = new List<object>();
+            foreach (var item in enumerable)
+            {
+                values.Add(item);
+            }
+
+            if (values.Count == 0)
+            {
+                return "FALSE"; // Always false condition
+            }
+
+            var paramNames = new List<string>();
+            foreach (var item in values)
+            {
+                var paramName = $"@p{paramCounter++}";
+                parameters.Add(new NpgsqlParameter(paramName, item));
+                paramNames.Add(paramName);
+            }
+
+            return $"{fieldExpression} IN ({string.Join(", ", paramNames)})";
+        }
+
+        // Single value (fallback)
+        var singleParamName = $"@p{paramCounter++}";
+        parameters.Add(new NpgsqlParameter(singleParamName, value));
+        return $"{fieldExpression} = {singleParamName}";
     }
 }

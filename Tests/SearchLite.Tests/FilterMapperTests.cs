@@ -453,6 +453,196 @@ public class FilterMapperTests
         nameNullCheck.Operator.Should().Be(Operator.IsNullOrEmpty);
     }
 
+    [Fact]
+    public void Map_WithStringContains_ShouldReturnContainsOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.Contains("test");
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.Contains,
+            Value = "test"
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringContains_ShouldReturnNotContainsOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name.Contains("test");
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.NotContains,
+            Value = "test"
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithCollectionContains_ShouldReturnInOperator()
+    {
+        var validAges = new[] { 25, 30, 35 };
+        Expression<Func<TestEntity, bool>> predicate = x => validAges.Contains(x.Age);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Age",
+            PropertyType = typeof(int),
+            Operator = Operator.In,
+            Value = validAges
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedCollectionContains_ShouldReturnNotInOperator()
+    {
+        var validAges = new[] { 25, 30, 35 };
+        Expression<Func<TestEntity, bool>> predicate = x => !validAges.Contains(x.Age);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Age",
+            PropertyType = typeof(int),
+            Operator = Operator.NotIn,
+            Value = validAges
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithListContains_ShouldReturnInOperator()
+    {
+        var validNames = new List<string> { "John", "Jane", "Bob" };
+        Expression<Func<TestEntity, bool>> predicate = x => validNames.Contains(x.Name);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.In,
+            Value = validNames
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithEnumerableContains_ShouldReturnInOperator()
+    {
+        var validAges = new[] { 25, 30, 35 };
+        Expression<Func<TestEntity, bool>> predicate = x => Enumerable.Contains(validAges, x.Age);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Age",
+            PropertyType = typeof(int),
+            Operator = Operator.In,
+            Value = validAges
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringContainsVariable_ShouldEvaluateVariable()
+    {
+        var searchTerm = "test";
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name.Contains(searchTerm);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.Contains,
+            Value = "test"
+        };
+        
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithSetOperatorsInComplexExpression_ShouldWorkCorrectly()
+    {
+        var validAges = new[] { 25, 30, 35 };
+        Expression<Func<TestEntity, bool>> predicate = x => 
+            x.Name.Contains("John") && (validAges.Contains(x.Age) || x.IsActive);
+        
+        var result = FilterMapper.Map(predicate);
+        
+        result.Should().BeOfType<FilterNode<TestEntity>.Group>();
+        var rootGroup = (FilterNode<TestEntity>.Group)result;
+        rootGroup.Operator.Should().Be(LogicalOperator.And);
+        rootGroup.Conditions.Should().HaveCount(2);
+        
+        // First condition: Name.Contains("John")
+        var firstCondition = rootGroup.Conditions[0].Should().BeOfType<FilterNode<TestEntity>.Condition>().Subject;
+        firstCondition.PropertyName.Should().Be("Name");
+        firstCondition.Operator.Should().Be(Operator.Contains);
+        firstCondition.Value.Should().Be("John");
+        
+        // Second condition: validAges.Contains(Age) || IsActive
+        var secondCondition = rootGroup.Conditions[1].Should().BeOfType<FilterNode<TestEntity>.Group>().Subject;
+        secondCondition.Operator.Should().Be(LogicalOperator.Or);
+        
+        var ageInCheck = secondCondition.Conditions[0].Should().BeOfType<FilterNode<TestEntity>.Condition>().Subject;
+        ageInCheck.PropertyName.Should().Be("Age");
+        ageInCheck.Operator.Should().Be(Operator.In);
+        ageInCheck.Value.Should().BeEquivalentTo(validAges);
+    }
+
+    [Fact]
+    public void Map_WithNullComparison_ShouldReturnNullOperators()
+    {
+        Expression<Func<TestEntity, bool>> equalNullPredicate = x => x.Name == null;
+        Expression<Func<TestEntity, bool>> notEqualNullPredicate = x => x.Name != null;
+        
+        var equalResult = FilterMapper.Map(equalNullPredicate);
+        var notEqualResult = FilterMapper.Map(notEqualNullPredicate);
+        
+        var expectedEqual = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.IsNull,
+            Value = true
+        };
+        
+        var expectedNotEqual = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.IsNotNull,
+            Value = true
+        };
+        
+        equalResult.Should().BeEquivalentTo(expectedEqual);
+        notEqualResult.Should().BeEquivalentTo(expectedNotEqual);
+    }
+
     private class TestEntity
     {
         public int Age { get; set; }
