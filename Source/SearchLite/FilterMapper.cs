@@ -46,6 +46,10 @@ public static class FilterMapper
                     VisitSetOperatorMethod(method),
                 UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsSetOperatorMethod(method) =>
                     VisitNegatedSetOperatorMethod(method),
+                MethodCallExpression method when IsStringOperatorMethod(method) =>
+                    VisitStringOperatorMethod(method),
+                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringOperatorMethod(method) =>
+                    VisitNegatedStringOperatorMethod(method),
                 ConstantExpression { Value: true } => 
                     new FilterNode<T>.Group { Operator = LogicalOperator.And, Conditions = new List<FilterNode<T>>() },
                 _ => throw new NotSupportedException($"Expression type {expression.NodeType} is not supported")
@@ -206,43 +210,30 @@ public static class FilterMapper
 
         private bool IsSetOperatorMethod(MethodCallExpression method)
         {
-            // Handle string.Contains
-            if (method.Method.DeclaringType == typeof(string) && method.Method.Name == nameof(string.Contains))
-                return true;
-
             // Handle collection.Contains (for IEnumerable<T>.Contains extension method)
             if (method.Method.Name == nameof(Enumerable.Contains) && method.Method.DeclaringType == typeof(Enumerable))
                 return true;
 
-            // Handle list/collection.Contains (instance method) - check for Contains method name
-            if (method.Method.Name == "Contains")
+            // Handle list/collection.Contains (instance method) - but exclude string.Contains
+            if (method.Method.Name == "Contains" && method.Method.DeclaringType != typeof(string))
                 return true;
 
             return false;
         }
 
+        private bool IsStringOperatorMethod(MethodCallExpression method)
+        {
+            if (method.Method.DeclaringType != typeof(string))
+                return false;
+
+            return method.Method.Name is 
+                nameof(string.Contains) or
+                nameof(string.StartsWith) or
+                nameof(string.EndsWith);
+        }
+
         private FilterNode<T> VisitSetOperatorMethod(MethodCallExpression method)
         {
-            // Handle string.Contains
-            if (method.Method.DeclaringType == typeof(string) && method.Method.Name == nameof(string.Contains))
-            {
-                if (method.Object is not MemberExpression memberExpression)
-                {
-                    throw new NotSupportedException("Unsupported string.Contains usage - property must be on the left side");
-                }
-
-                var propertyInfo = (PropertyInfo)memberExpression.Member;
-                var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
-
-                return new FilterNode<T>.Condition
-                {
-                    PropertyName = propertyInfo.Name,
-                    PropertyType = propertyInfo.PropertyType,
-                    Operator = Operator.Contains,
-                    Value = value!
-                };
-            }
-
             // Handle collection.Contains (both static Enumerable.Contains and instance Contains)
             MemberExpression? targetMember = null;
             object? collectionValue = null;
@@ -345,6 +336,73 @@ public static class FilterMapper
             
             // Default case - try to compile the expression directly
             return Expression.Lambda(expression).Compile().DynamicInvoke();
+        }
+
+        private FilterNode<T> VisitStringOperatorMethod(MethodCallExpression method)
+        {
+            if (method.Object is not MemberExpression memberExpression)
+            {
+                throw new NotSupportedException($"Unsupported {method.Method.Name} usage - property must be on the left side");
+            }
+
+            var propertyInfo = (PropertyInfo)memberExpression.Member;
+            var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+
+            // Determine if case-insensitive by checking if StringComparison parameter is provided
+            var isIgnoreCase = false;
+            if (method.Arguments.Count > 1 && method.Arguments[1] is ConstantExpression constantExpr)
+            {
+                if (constantExpr.Value is StringComparison comparison)
+                {
+                    isIgnoreCase = comparison is StringComparison.OrdinalIgnoreCase or 
+                                                StringComparison.CurrentCultureIgnoreCase or 
+                                                StringComparison.InvariantCultureIgnoreCase;
+                }
+            }
+
+            var operatorType = method.Method.Name switch
+            {
+                nameof(string.Contains) => isIgnoreCase ? Operator.ContainsIgnoreCase : Operator.Contains,
+                nameof(string.StartsWith) => isIgnoreCase ? Operator.StartsWithIgnoreCase : Operator.StartsWith,
+                nameof(string.EndsWith) => isIgnoreCase ? Operator.EndsWithIgnoreCase : Operator.EndsWith,
+                _ => throw new NotSupportedException($"String operator {method.Method.Name} is not supported")
+            };
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = propertyInfo.Name,
+                PropertyType = propertyInfo.PropertyType,
+                Operator = operatorType,
+                Value = value!
+            };
+        }
+
+        private FilterNode<T> VisitNegatedStringOperatorMethod(MethodCallExpression method)
+        {
+            var positiveResult = VisitStringOperatorMethod(method);
+            if (positiveResult is FilterNode<T>.Condition condition)
+            {
+                var negatedOperator = condition.Operator switch
+                {
+                    Operator.Contains => Operator.NotContains,
+                    Operator.ContainsIgnoreCase => Operator.NotContainsIgnoreCase,
+                    Operator.StartsWith => Operator.NotStartsWith,
+                    Operator.StartsWithIgnoreCase => Operator.NotStartsWithIgnoreCase,
+                    Operator.EndsWith => Operator.NotEndsWith,
+                    Operator.EndsWithIgnoreCase => Operator.NotEndsWithIgnoreCase,
+                    _ => throw new NotSupportedException($"Cannot negate string operator {condition.Operator}")
+                };
+
+                return new FilterNode<T>.Condition
+                {
+                    PropertyName = condition.PropertyName,
+                    PropertyType = condition.PropertyType,
+                    Operator = negatedOperator,
+                    Value = condition.Value
+                };
+            }
+
+            throw new NotSupportedException("Cannot negate non-condition result");
         }
     }
 }

@@ -643,6 +643,248 @@ public class FilterMapperTests
         notEqualResult.Should().BeEquivalentTo(expectedNotEqual);
     }
 
+    [Fact]
+    public void Map_WithStringStartsWith_ShouldReturnStartsWithOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.StartsWith("test");
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.StartsWith,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringStartsWith_ShouldReturnNotStartsWithOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name!.StartsWith("test");
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.NotStartsWith,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringStartsWithIgnoreCase_ShouldReturnStartsWithIgnoreCaseOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.StartsWith("test", StringComparison.OrdinalIgnoreCase);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.StartsWithIgnoreCase,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringStartsWithIgnoreCase_ShouldReturnNotStartsWithIgnoreCaseOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name!.StartsWith("test", StringComparison.OrdinalIgnoreCase);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.NotStartsWithIgnoreCase,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringEndsWith_ShouldReturnEndsWithOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.EndsWith("test");
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.EndsWith,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringEndsWith_ShouldReturnNotEndsWithOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name!.EndsWith("test");
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.NotEndsWith,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringEndsWithIgnoreCase_ShouldReturnEndsWithIgnoreCaseOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.EndsWith("test", StringComparison.OrdinalIgnoreCase);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.EndsWithIgnoreCase,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringEndsWithIgnoreCase_ShouldReturnNotEndsWithIgnoreCaseOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name!.EndsWith("test", StringComparison.OrdinalIgnoreCase);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.NotEndsWithIgnoreCase,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringContainsIgnoreCase_ShouldReturnContainsIgnoreCaseOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.Contains("test", StringComparison.OrdinalIgnoreCase);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.ContainsIgnoreCase,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNegatedStringContainsIgnoreCase_ShouldReturnNotContainsIgnoreCaseOperator()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name!.Contains("test", StringComparison.OrdinalIgnoreCase);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.NotContainsIgnoreCase,
+            Value = "test"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringOperatorCaseSensitivityVariants_ShouldDetectCorrectly()
+    {
+        // Test different StringComparison values
+        Expression<Func<TestEntity, bool>> ordinalPredicate = x => x.Name!.StartsWith("test", StringComparison.Ordinal);
+        Expression<Func<TestEntity, bool>> currentCultureIgnoreCasePredicate = x => x.Name!.StartsWith("test", StringComparison.CurrentCultureIgnoreCase);
+        Expression<Func<TestEntity, bool>> invariantCultureIgnoreCasePredicate = x => x.Name!.StartsWith("test", StringComparison.InvariantCultureIgnoreCase);
+
+        var ordinalResult = FilterMapper.Map(ordinalPredicate);
+        var currentCultureResult = FilterMapper.Map(currentCultureIgnoreCasePredicate);
+        var invariantCultureResult = FilterMapper.Map(invariantCultureIgnoreCasePredicate);
+
+        // Ordinal should be case-sensitive (regular StartsWith)
+        ((FilterNode<TestEntity>.Condition)ordinalResult).Operator.Should().Be(Operator.StartsWith);
+        
+        // IgnoreCase variants should use IgnoreCase operators
+        ((FilterNode<TestEntity>.Condition)currentCultureResult).Operator.Should().Be(Operator.StartsWithIgnoreCase);
+        ((FilterNode<TestEntity>.Condition)invariantCultureResult).Operator.Should().Be(Operator.StartsWithIgnoreCase);
+    }
+
+    [Fact]
+    public void Map_WithStringOperatorVariable_ShouldEvaluateVariable()
+    {
+        var searchTerm = "dynamic";
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.StartsWith(searchTerm);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Name",
+            PropertyType = typeof(string),
+            Operator = Operator.StartsWith,
+            Value = "dynamic"
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithComplexStringOperatorExpression_ShouldMapCorrectly()
+    {
+        var prefix = "pre";
+        var suffix = "suf";
+        Expression<Func<TestEntity, bool>> predicate = x => 
+            x.Name!.StartsWith(prefix) && (x.Name.EndsWith(suffix) || x.Name.Contains("middle"));
+        var result = FilterMapper.Map(predicate);
+
+        result.Should().BeOfType<FilterNode<TestEntity>.Group>();
+        var group = (FilterNode<TestEntity>.Group)result;
+        group.Operator.Should().Be(LogicalOperator.And);
+        group.Conditions.Should().HaveCount(2);
+
+        // First condition: Name.StartsWith(prefix)
+        var firstCondition = (FilterNode<TestEntity>.Condition)group.Conditions[0];
+        firstCondition.PropertyName.Should().Be("Name");
+        firstCondition.Operator.Should().Be(Operator.StartsWith);
+        firstCondition.Value.Should().Be("pre");
+
+        // Second condition: (Name.EndsWith(suffix) || Name.Contains("middle"))
+        var secondCondition = (FilterNode<TestEntity>.Group)group.Conditions[1];
+        secondCondition.Operator.Should().Be(LogicalOperator.Or);
+        secondCondition.Conditions.Should().HaveCount(2);
+
+        var endsWith = (FilterNode<TestEntity>.Condition)secondCondition.Conditions[0];
+        endsWith.Operator.Should().Be(Operator.EndsWith);
+        endsWith.Value.Should().Be("suf");
+
+        var contains = (FilterNode<TestEntity>.Condition)secondCondition.Conditions[1];
+        contains.Operator.Should().Be(Operator.Contains);
+        contains.Value.Should().Be("middle");
+    }
+
     private class TestEntity
     {
         public int Age { get; set; }

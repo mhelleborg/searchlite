@@ -33,6 +33,16 @@ public enum Operator
     IsNotNull,
     Contains,
     NotContains,
+    ContainsIgnoreCase,
+    NotContainsIgnoreCase,
+    StartsWith,
+    NotStartsWith,
+    StartsWithIgnoreCase,
+    NotStartsWithIgnoreCase,
+    EndsWith,
+    NotEndsWith,
+    EndsWithIgnoreCase,
+    NotEndsWithIgnoreCase,
     In,
     NotIn
 }

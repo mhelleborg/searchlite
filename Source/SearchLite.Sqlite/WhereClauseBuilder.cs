@@ -80,6 +80,12 @@ public static class WhereClauseBuilder<T>
             return BuildSetCondition(condition, ref paramCounter, parameters);
         }
 
+        // Handle string operators (Contains, StartsWith, EndsWith and their variants)
+        if (IsStringOperator(condition.Operator))
+        {
+            return BuildStringCondition(condition, ref paramCounter, parameters);
+        }
+
         var sqliteType = GetSqliteType(condition.PropertyType);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"@p{paramCounter++}";
@@ -159,7 +165,17 @@ public static class WhereClauseBuilder<T>
 
     private static bool IsSetOperator(Operator op)
     {
-        return op is Operator.Contains or Operator.NotContains or Operator.In or Operator.NotIn;
+        return op is Operator.In or Operator.NotIn;
+    }
+
+    private static bool IsStringOperator(Operator op)
+    {
+        return op is Operator.Contains or Operator.NotContains or
+                     Operator.ContainsIgnoreCase or Operator.NotContainsIgnoreCase or
+                     Operator.StartsWith or Operator.NotStartsWith or
+                     Operator.StartsWithIgnoreCase or Operator.NotStartsWithIgnoreCase or
+                     Operator.EndsWith or Operator.NotEndsWith or
+                     Operator.EndsWithIgnoreCase or Operator.NotEndsWithIgnoreCase;
     }
 
     private static string BuildSetCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
@@ -170,19 +186,39 @@ public static class WhereClauseBuilder<T>
 
         return condition.Operator switch
         {
-            Operator.Contains => BuildContainsCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
-            Operator.NotContains => $"NOT ({BuildContainsCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
             Operator.In => BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
             Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
             _ => throw new NotSupportedException($"Set operator {condition.Operator} is not supported")
         };
     }
 
+    private static string BuildStringCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var fieldExpression = $"CAST(json_extract(document, '$.{condition.PropertyName}') AS TEXT)";
+
+        return condition.Operator switch
+        {
+            Operator.Contains => BuildContainsCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotContains => $"NOT ({BuildContainsCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.ContainsIgnoreCase => BuildContainsIgnoreCaseCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotContainsIgnoreCase => $"NOT ({BuildContainsIgnoreCaseCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.StartsWith => BuildStartsWithCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotStartsWith => $"NOT ({BuildStartsWithCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.StartsWithIgnoreCase => BuildStartsWithIgnoreCaseCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotStartsWithIgnoreCase => $"NOT ({BuildStartsWithIgnoreCaseCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.EndsWith => BuildEndsWithCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotEndsWith => $"NOT ({BuildEndsWithCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.EndsWithIgnoreCase => BuildEndsWithIgnoreCaseCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
+            Operator.NotEndsWithIgnoreCase => $"NOT ({BuildEndsWithIgnoreCaseCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            _ => throw new NotSupportedException($"String operator {condition.Operator} is not supported")
+        };
+    }
+
     private static string BuildContainsCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
     {
         var paramName = $"@p{paramCounter++}";
-        parameters.Add(new SqliteParameter(paramName, $"%{value}%"));
-        return $"{fieldExpression} LIKE {paramName}";
+        parameters.Add(new SqliteParameter(paramName, $"*{value}*"));
+        return $"{fieldExpression} GLOB {paramName}";
     }
 
     private static string BuildInCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
@@ -216,5 +252,40 @@ public static class WhereClauseBuilder<T>
         var singleParamName = $"@p{paramCounter++}";
         parameters.Add(new SqliteParameter(singleParamName, value));
         return $"{fieldExpression} = {singleParamName}";
+    }
+
+    private static string BuildContainsIgnoreCaseCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new SqliteParameter(paramName, $"%{value}%"));
+        return $"LOWER({fieldExpression}) LIKE LOWER({paramName})";
+    }
+
+    private static string BuildStartsWithCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new SqliteParameter(paramName, $"{value}*"));
+        return $"{fieldExpression} GLOB {paramName}";
+    }
+
+    private static string BuildStartsWithIgnoreCaseCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new SqliteParameter(paramName, $"{value}%"));
+        return $"LOWER({fieldExpression}) LIKE LOWER({paramName})";
+    }
+
+    private static string BuildEndsWithCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new SqliteParameter(paramName, $"*{value}"));
+        return $"{fieldExpression} GLOB {paramName}";
+    }
+
+    private static string BuildEndsWithIgnoreCaseCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new SqliteParameter(paramName, $"%{value}"));
+        return $"LOWER({fieldExpression}) LIKE LOWER({paramName})";
     }
 }
