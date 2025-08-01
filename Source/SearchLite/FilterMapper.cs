@@ -50,6 +50,10 @@ public static class FilterMapper
                     VisitStringOperatorMethod(method),
                 UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringOperatorMethod(method) =>
                     VisitNegatedStringOperatorMethod(method),
+                MethodCallExpression method when IsComparisonMethod(method) =>
+                    VisitComparisonMethod(method),
+                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsComparisonMethod(method) =>
+                    VisitNegatedComparisonMethod(method),
                 ConstantExpression { Value: true } => 
                     new FilterNode<T>.Group { Operator = LogicalOperator.And, Conditions = new List<FilterNode<T>>() },
                 _ => throw new NotSupportedException($"Expression type {expression.NodeType} is not supported")
@@ -82,6 +86,11 @@ public static class FilterMapper
 
         private FilterNode<T> VisitComparisonBinary(BinaryExpression node)
         {
+            if (IsMethodCallWithResult(node.Left))
+            {
+                return VisitMethodCallComparison(node);
+            }
+
             var memberExpression = GetMemberExpression(node);
             if (memberExpression == null)
             {
@@ -120,6 +129,82 @@ public static class FilterMapper
             };
         }
 
+        private FilterNode<T> VisitMethodCallComparison(BinaryExpression node)
+        {
+            var methodCall = (MethodCallExpression)node.Left;
+            
+            if (methodCall.Object is not MemberExpression memberExpression)
+            {
+                throw new NotSupportedException($"{methodCall.Method.Name} method must be called on a property");
+            }
+
+            var propertyInfo = (PropertyInfo)memberExpression.Member;
+            var comparisonResult = Expression.Lambda(node.Right).Compile().DynamicInvoke();
+
+            return methodCall.Method.Name switch
+            {
+                nameof(IComparable.CompareTo) or "CompareTo" => HandleCompareToComparison(methodCall, propertyInfo, node.NodeType, comparisonResult),
+                nameof(object.ToString) => HandleToStringComparison(propertyInfo, node.NodeType, comparisonResult),
+                _ => throw new NotSupportedException($"Method {methodCall.Method.Name} is not supported in binary comparisons")
+            };
+        }
+
+        private FilterNode<T> HandleCompareToComparison(MethodCallExpression methodCall, PropertyInfo propertyInfo, 
+            ExpressionType nodeType, object? comparisonResult)
+        {
+            var compareValue = Expression.Lambda(methodCall.Arguments[0]).Compile().DynamicInvoke();
+
+            // CompareTo returns: < 0 if less, 0 if equal, > 0 if greater
+            // We support: x.CompareTo(y) == 0, x.CompareTo(y) != 0, x.CompareTo(y) > 0, etc.
+            
+            if (comparisonResult is not int result)
+            {
+                throw new NotSupportedException("CompareTo comparisons must be against integer constants");
+            }
+
+            var operatorType = (nodeType, result) switch
+            {
+                (ExpressionType.Equal, 0) => Operator.Equal,
+                (ExpressionType.NotEqual, 0) => Operator.NotEqual,
+                (ExpressionType.GreaterThan, 0) => Operator.GreaterThan,
+                (ExpressionType.GreaterThanOrEqual, 0) => Operator.GreaterThanOrEqual,
+                (ExpressionType.LessThan, 0) => Operator.LessThan,
+                (ExpressionType.LessThanOrEqual, 0) => Operator.LessThanOrEqual,
+                _ => throw new NotSupportedException($"CompareTo with operator {nodeType} and result {result} is not supported. Use comparisons against 0.")
+            };
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = propertyInfo.Name,
+                PropertyType = propertyInfo.PropertyType,
+                Operator = operatorType,
+                Value = compareValue!
+            };
+        }
+
+        private FilterNode<T> HandleToStringComparison(PropertyInfo propertyInfo, ExpressionType nodeType, object? comparisonResult)
+        {
+            if (comparisonResult is not string stringValue)
+            {
+                throw new NotSupportedException("ToString comparisons must be against string constants");
+            }
+
+            var operatorType = nodeType switch
+            {
+                ExpressionType.Equal => Operator.Equal,
+                ExpressionType.NotEqual => Operator.NotEqual,
+                _ => throw new NotSupportedException($"ToString with operator {nodeType} is not supported. Use == or != only.")
+            };
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = propertyInfo.Name,
+                PropertyType = propertyInfo.PropertyType,
+                Operator = operatorType,
+                Value = stringValue
+            };
+        }
+
         private static bool IsComparisonOperator(ExpressionType nodeType)
         {
             return nodeType is ExpressionType.Equal or ExpressionType.NotEqual or 
@@ -147,6 +232,19 @@ public static class FilterMapper
                 return memberExpr;
 
             return null;
+        }
+
+        private static bool IsCompareToMethodCall(Expression expression)
+        {
+            return expression is MethodCallExpression method &&
+                   method.Method.Name is nameof(IComparable.CompareTo) or "CompareTo";
+        }
+
+        private static bool IsMethodCallWithResult(Expression expression)
+        {
+            return expression is MethodCallExpression method &&
+                   method.Method.Name is nameof(IComparable.CompareTo) or "CompareTo" or
+                                         nameof(object.ToString);
         }
 
         private static Operator GetOperator(ExpressionType type) => type switch
@@ -230,6 +328,15 @@ public static class FilterMapper
                 nameof(string.Contains) or
                 nameof(string.StartsWith) or
                 nameof(string.EndsWith);
+        }
+
+        private bool IsComparisonMethod(MethodCallExpression method)
+        {
+            return method.Method.Name is 
+                nameof(object.Equals) or
+                nameof(IComparable.CompareTo) or
+                "CompareTo" or // Handle both generic and non-generic CompareTo
+                nameof(object.ToString);
         }
 
         private FilterNode<T> VisitSetOperatorMethod(MethodCallExpression method)
@@ -403,6 +510,57 @@ public static class FilterMapper
             }
 
             throw new NotSupportedException("Cannot negate non-condition result");
+        }
+
+        private FilterNode<T> VisitComparisonMethod(MethodCallExpression method)
+        {
+            if (method.Object is not MemberExpression memberExpression)
+            {
+                throw new NotSupportedException($"Unsupported {method.Method.Name} usage - property must be on the left side");
+            }
+
+            var propertyInfo = (PropertyInfo)memberExpression.Member;
+            var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+
+            return method.Method.Name switch
+            {
+                nameof(object.Equals) => new FilterNode<T>.Condition
+                {
+                    PropertyName = propertyInfo.Name,
+                    PropertyType = propertyInfo.PropertyType,
+                    Operator = Operator.Equal,
+                    Value = value!
+                },
+                nameof(IComparable.CompareTo) or "CompareTo" => throw new NotSupportedException(
+                    "CompareTo method should be used with comparison operators (e.g., x.CompareTo(y) == 0, x.CompareTo(y) > 0)"),
+                nameof(object.ToString) => throw new NotSupportedException(
+                    "ToString method should be used with comparison operators (e.g., x.ToString() == \"value\")"),
+                _ => throw new NotSupportedException($"Comparison method {method.Method.Name} is not supported")
+            };
+        }
+
+        private FilterNode<T> VisitNegatedComparisonMethod(MethodCallExpression method)
+        {
+            if (method.Method.Name == nameof(object.Equals))
+            {
+                if (method.Object is not MemberExpression memberExpression)
+                {
+                    throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage - property must be on the left side");
+                }
+
+                var propertyInfo = (PropertyInfo)memberExpression.Member;
+                var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+
+                return new FilterNode<T>.Condition
+                {
+                    PropertyName = propertyInfo.Name,
+                    PropertyType = propertyInfo.PropertyType,
+                    Operator = Operator.NotEqual,
+                    Value = value!
+                };
+            }
+
+            throw new NotSupportedException($"Cannot negate comparison method {method.Method.Name}");
         }
     }
 }
