@@ -91,7 +91,7 @@ public static class FilterMapper
                 return VisitMethodCallComparison(node);
             }
 
-            var memberExpression = GetMemberExpression(node);
+            var (memberExpression, isLeftSide) = GetMemberExpression(node);
             if (memberExpression == null)
             {
                 CheckForUnsupportedOperations(node.Left);
@@ -99,7 +99,9 @@ public static class FilterMapper
             }
 
             var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var value = Expression.Lambda(node.Right).Compile().DynamicInvoke();
+            // Extract value from the opposite side of where the member expression is
+            var valueExpression = isLeftSide ? node.Right : node.Left;
+            var value = Expression.Lambda(valueExpression).Compile().DynamicInvoke();
 
             // Handle null comparisons specially
             if (value == null)
@@ -120,11 +122,14 @@ public static class FilterMapper
                 };
             }
 
+            // When member is on the right side and constant on left, we need to flip comparison operators
+            var operatorType = GetOperator(node.NodeType, !isLeftSide);
+
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
                 PropertyType = propertyInfo.PropertyType,
-                Operator = GetOperator(node.NodeType),
+                Operator = operatorType,
                 Value = value!
             };
         }
@@ -222,39 +227,51 @@ public static class FilterMapper
             }
         }
 
-        private static MemberExpression? GetMemberExpression(BinaryExpression node)
+        private static (MemberExpression? memberExpression, bool isLeftSide) GetMemberExpression(BinaryExpression node)
         {
-            if (node.Left is MemberExpression memberExpression)
-                return memberExpression;
+            // Check left side first
+            if (node.Left is MemberExpression leftMemberExpression)
+                return (leftMemberExpression, true);
 
-            if (node.Left is MethodCallExpression methodCall &&
-                methodCall.Object is MemberExpression memberExpr)
-                return memberExpr;
+            if (node.Left is MethodCallExpression leftMethodCall &&
+                leftMethodCall.Object is MemberExpression leftMemberExpr)
+                return (leftMemberExpr, true);
 
-            return null;
+            // Check right side
+            if (node.Right is MemberExpression rightMemberExpression)
+                return (rightMemberExpression, false);
+
+            if (node.Right is MethodCallExpression rightMethodCall &&
+                rightMethodCall.Object is MemberExpression rightMemberExpr)
+                return (rightMemberExpr, false);
+
+            return (null, true);
         }
 
         private static bool IsCompareToMethodCall(Expression expression)
         {
-            return expression is MethodCallExpression method &&
-                   method.Method.Name is nameof(IComparable.CompareTo) or "CompareTo";
+            return expression is MethodCallExpression { Method.Name: nameof(IComparable.CompareTo) };
         }
 
         private static bool IsMethodCallWithResult(Expression expression)
         {
-            return expression is MethodCallExpression method &&
-                   method.Method.Name is nameof(IComparable.CompareTo) or "CompareTo" or
-                                         nameof(object.ToString);
+            return expression is MethodCallExpression { Method.Name: nameof(IComparable.CompareTo) or
+                nameof(ToString)
+            };
         }
 
-        private static Operator GetOperator(ExpressionType type) => type switch
+        private static Operator GetOperator(ExpressionType type, bool flipComparison = false) => (type, flipComparison) switch
         {
-            ExpressionType.Equal => Operator.Equal,
-            ExpressionType.NotEqual => Operator.NotEqual,
-            ExpressionType.GreaterThan => Operator.GreaterThan,
-            ExpressionType.GreaterThanOrEqual => Operator.GreaterThanOrEqual,
-            ExpressionType.LessThan => Operator.LessThan,
-            ExpressionType.LessThanOrEqual => Operator.LessThanOrEqual,
+            (ExpressionType.Equal, _) => Operator.Equal,
+            (ExpressionType.NotEqual, _) => Operator.NotEqual,
+            (ExpressionType.GreaterThan, false) => Operator.GreaterThan,
+            (ExpressionType.GreaterThan, true) => Operator.LessThan,
+            (ExpressionType.GreaterThanOrEqual, false) => Operator.GreaterThanOrEqual,
+            (ExpressionType.GreaterThanOrEqual, true) => Operator.LessThanOrEqual,
+            (ExpressionType.LessThan, false) => Operator.LessThan,
+            (ExpressionType.LessThan, true) => Operator.GreaterThan,
+            (ExpressionType.LessThanOrEqual, false) => Operator.LessThanOrEqual,
+            (ExpressionType.LessThanOrEqual, true) => Operator.GreaterThanOrEqual,
             _ => throw new NotSupportedException($"Operator {type} is not supported")
         };
 
@@ -514,13 +531,28 @@ public static class FilterMapper
 
         private FilterNode<T> VisitComparisonMethod(MethodCallExpression method)
         {
-            if (method.Object is not MemberExpression memberExpression)
+            MemberExpression? memberExpression = null;
+            object? value = null;
+
+            // Case 1: property.Equals(constant) - x.Age.Equals(30)
+            if (method.Object is MemberExpression objMember)
             {
-                throw new NotSupportedException($"Unsupported {method.Method.Name} usage - property must be on the left side");
+                memberExpression = objMember;
+                value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+            }
+            // Case 2: constant.Equals(property) - 30.Equals(x.Age)
+            else if (method.Arguments.Count > 0 && method.Arguments[0] is MemberExpression argMember)
+            {
+                memberExpression = argMember;
+                value = Expression.Lambda(method.Object!).Compile().DynamicInvoke();
+            }
+
+            if (memberExpression == null)
+            {
+                throw new NotSupportedException($"Unsupported {method.Method.Name} usage - one operand must be a property");
             }
 
             var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
 
             return method.Method.Name switch
             {
@@ -543,13 +575,28 @@ public static class FilterMapper
         {
             if (method.Method.Name == nameof(object.Equals))
             {
-                if (method.Object is not MemberExpression memberExpression)
+                MemberExpression? memberExpression = null;
+                object? value = null;
+
+                // Case 1: property.Equals(constant) - x.Age.Equals(30)
+                if (method.Object is MemberExpression objMember)
                 {
-                    throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage - property must be on the left side");
+                    memberExpression = objMember;
+                    value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+                }
+                // Case 2: constant.Equals(property) - 30.Equals(x.Age)
+                else if (method.Arguments.Count > 0 && method.Arguments[0] is MemberExpression argMember)
+                {
+                    memberExpression = argMember;
+                    value = Expression.Lambda(method.Object!).Compile().DynamicInvoke();
+                }
+
+                if (memberExpression == null)
+                {
+                    throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage - one operand must be a property");
                 }
 
                 var propertyInfo = (PropertyInfo)memberExpression.Member;
-                var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
 
                 return new FilterNode<T>.Condition
                 {

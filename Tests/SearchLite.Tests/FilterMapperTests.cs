@@ -21,7 +21,23 @@ public class FilterMapperTests
 
         result.Should().BeEquivalentTo(expected);
     }
+    
+    [Fact]
+    public void Map_WithSimpleEqualityConditionReversed_ShouldReturnCorrectFilterNode()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => 30 == x.Age;
+        var result = FilterMapper.Map(predicate);
 
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Age",
+            PropertyType = typeof(int),
+            Operator = Operator.Equal,
+            Value = 30
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
     
     [Fact]
     public void Map_PropertyReference_ShouldExtractValue()
@@ -228,6 +244,36 @@ public class FilterMapperTests
         ((FilterNode<TestEntity>.Condition)lessThanOrEqualResult).Operator.Should().Be(Operator.LessThanOrEqual);
     }
 
+        [Fact]
+    public void Map_WithAllComparisonOperatorsReversed_ShouldReturnCorrectOperators()
+    {
+        // Test all supported comparison operators
+        Expression<Func<TestEntity, bool>> equalPredicate = x => 30 == x.Age;
+        Expression<Func<TestEntity, bool>> equalMethodPredicate = x => 30.Equals(x.Age);
+        Expression<Func<TestEntity, bool>> notEqualMethodPredicate = x => !30.Equals(x.Age);
+        Expression<Func<TestEntity, bool>> notEqualPredicate = x => 30 != x.Age;
+        Expression<Func<TestEntity, bool>> greaterThanPredicate = x => 30 < x.Age;
+        Expression<Func<TestEntity, bool>> greaterThanOrEqualPredicate = x => 30 <= x.Age;
+        Expression<Func<TestEntity, bool>> lessThanPredicate = x => 30 > x.Age;
+        Expression<Func<TestEntity, bool>> lessThanOrEqualPredicate = x => 30 >= x.Age;
+        var equalResult = FilterMapper.Map(equalPredicate);
+        var equalMethodResult = FilterMapper.Map(equalMethodPredicate);
+        var notEqualResult = FilterMapper.Map(notEqualPredicate);
+        var notEqualMethodResult = FilterMapper.Map(notEqualMethodPredicate);
+        var greaterThanResult = FilterMapper.Map(greaterThanPredicate);
+        var greaterThanOrEqualResult = FilterMapper.Map(greaterThanOrEqualPredicate);
+        var lessThanResult = FilterMapper.Map(lessThanPredicate);
+        var lessThanOrEqualResult = FilterMapper.Map(lessThanOrEqualPredicate);
+        ((FilterNode<TestEntity>.Condition)equalResult).Operator.Should().Be(Operator.Equal);
+        ((FilterNode<TestEntity>.Condition)equalMethodResult).Operator.Should().Be(Operator.Equal);
+        ((FilterNode<TestEntity>.Condition)notEqualResult).Operator.Should().Be(Operator.NotEqual);
+        ((FilterNode<TestEntity>.Condition)notEqualMethodResult).Operator.Should().Be(Operator.NotEqual);
+        ((FilterNode<TestEntity>.Condition)greaterThanResult).Operator.Should().Be(Operator.GreaterThan);
+        ((FilterNode<TestEntity>.Condition)greaterThanOrEqualResult).Operator.Should().Be(Operator.GreaterThanOrEqual);
+        ((FilterNode<TestEntity>.Condition)lessThanResult).Operator.Should().Be(Operator.LessThan);
+        ((FilterNode<TestEntity>.Condition)lessThanOrEqualResult).Operator.Should().Be(Operator.LessThanOrEqual);
+    }
+    
     [Fact]
     public void Map_Composite()
     {
