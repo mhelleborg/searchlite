@@ -233,6 +233,11 @@ public static class FilterMapper
             if (node.Left is MemberExpression leftMemberExpression)
                 return (leftMemberExpression, true);
 
+            // Handle conversion expressions (often used with enums and numeric types)
+            if (node.Left is UnaryExpression leftUnary && leftUnary.NodeType == ExpressionType.Convert && 
+                leftUnary.Operand is MemberExpression leftConvertedMember)
+                return (leftConvertedMember, true);
+
             if (node.Left is MethodCallExpression leftMethodCall &&
                 leftMethodCall.Object is MemberExpression leftMemberExpr)
                 return (leftMemberExpr, true);
@@ -240,6 +245,11 @@ public static class FilterMapper
             // Check right side
             if (node.Right is MemberExpression rightMemberExpression)
                 return (rightMemberExpression, false);
+
+            // Handle conversion expressions (often used with enums and numeric types)
+            if (node.Right is UnaryExpression rightUnary && rightUnary.NodeType == ExpressionType.Convert && 
+                rightUnary.Operand is MemberExpression rightConvertedMember)
+                return (rightConvertedMember, false);
 
             if (node.Right is MethodCallExpression rightMethodCall &&
                 rightMethodCall.Object is MemberExpression rightMemberExpr)

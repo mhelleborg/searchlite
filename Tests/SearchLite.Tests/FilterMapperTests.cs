@@ -556,7 +556,7 @@ public class FilterMapperTests
     [Fact]
     public void Map_WithNegatedStringContains_ShouldReturnNotContainsOperator()
     {
-        Expression<Func<TestEntity, bool>> predicate = x => !x.Name.Contains("test");
+        Expression<Func<TestEntity, bool>> predicate = x => !x.Name!.Contains("test");
 
         var result = FilterMapper.Map(predicate);
 
@@ -651,7 +651,7 @@ public class FilterMapperTests
     public void Map_WithStringContainsVariable_ShouldEvaluateVariable()
     {
         var searchTerm = "test";
-        Expression<Func<TestEntity, bool>> predicate = x => x.Name.Contains(searchTerm);
+        Expression<Func<TestEntity, bool>> predicate = x => x.Name!.Contains(searchTerm);
 
         var result = FilterMapper.Map(predicate);
 
@@ -671,7 +671,7 @@ public class FilterMapperTests
     {
         var validAges = new[] { 25, 30, 35 };
         Expression<Func<TestEntity, bool>> predicate = x =>
-            x.Name.Contains("John") && (validAges.Contains(x.Age) || x.IsActive);
+            x.Name!.Contains("John") && (validAges.Contains(x.Age) || x.IsActive);
 
         var result = FilterMapper.Map(predicate);
 
@@ -1127,6 +1127,402 @@ public class FilterMapperTests
         result.Should().BeEquivalentTo(expected);
     }
 
+    [Fact]
+    public void Map_WithGuidComparison_ShouldHandleGuidValues()
+    {
+        var testGuid = Guid.NewGuid();
+        Expression<Func<TestEntity, bool>> predicate = x => x.Id == testGuid;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Id",
+            PropertyType = typeof(Guid),
+            Operator = Operator.Equal,
+            Value = testGuid
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithGuidNotEqualComparison_ShouldHandleGuidValues()
+    {
+        var testGuid = Guid.NewGuid();
+        Expression<Func<TestEntity, bool>> predicate = x => x.Id != testGuid;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Id",
+            PropertyType = typeof(Guid),
+            Operator = Operator.NotEqual,
+            Value = testGuid
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithGuidCollectionContains_ShouldHandleGuidInOperator()
+    {
+        var validIds = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+        Expression<Func<TestEntity, bool>> predicate = x => validIds.Contains(x.Id);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Id",
+            PropertyType = typeof(Guid),
+            Operator = Operator.In,
+            Value = validIds
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithEnumComparison_ShouldHandleEnumValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Status == TestStatus.Active;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Status",
+            PropertyType = typeof(TestStatus),
+            Operator = Operator.Equal,
+            Value = 1 // TestStatus.Active has underlying value 1
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithEnumNotEqualComparison_ShouldHandleEnumValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Status != TestStatus.Pending;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Status",
+            PropertyType = typeof(TestStatus),
+            Operator = Operator.NotEqual,
+            Value = 0 // TestStatus.Pending has underlying value 0
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithEnumGreaterThanComparison_ShouldHandleEnumValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.Status > TestStatus.Pending;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Status",
+            PropertyType = typeof(TestStatus),
+            Operator = Operator.GreaterThan,
+            Value = 0 // TestStatus.Pending has underlying value 0
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithEnumCollectionContains_ShouldHandleEnumInOperator()
+    {
+        var validStatuses = new[] { TestStatus.Active, TestStatus.Completed };
+        Expression<Func<TestEntity, bool>> predicate = x => validStatuses.Contains(x.Status);
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Status",
+            PropertyType = typeof(TestStatus),
+            Operator = Operator.In,
+            Value = validStatuses // Array of enum values is preserved correctly
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNullableEnumComparison_ShouldHandleNullableEnumValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.NullableStatus == TestStatus.Active;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "NullableStatus",
+            PropertyType = typeof(TestStatus?),
+            Operator = Operator.Equal,
+            Value = 1 // TestStatus.Active has underlying value 1
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithNullableEnumNullComparison_ShouldHandleNullableEnumNullValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.NullableStatus == null;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "NullableStatus",
+            PropertyType = typeof(TestStatus?),
+            Operator = Operator.IsNull,
+            Value = true
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithByteComparison_ShouldHandleByteValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.ByteValue >= 100;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "ByteValue",
+            PropertyType = typeof(byte),
+            Operator = Operator.GreaterThanOrEqual,
+            Value = (byte)100
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithShortComparison_ShouldHandleShortValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.ShortValue < 1000;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "ShortValue",
+            PropertyType = typeof(short),
+            Operator = Operator.LessThan,
+            Value = (short)1000
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithLongComparison_ShouldHandleLongValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.LongValue > 1000000L;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "LongValue",
+            PropertyType = typeof(long),
+            Operator = Operator.GreaterThan,
+            Value = 1000000L
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithFloatComparison_ShouldHandleFloatValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.FloatValue <= 3.14f;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "FloatValue",
+            PropertyType = typeof(float),
+            Operator = Operator.LessThanOrEqual,
+            Value = 3.14f
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithDecimalComparison_ShouldHandleDecimalValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.DecimalValue == 99.99m;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "DecimalValue",
+            PropertyType = typeof(decimal),
+            Operator = Operator.Equal,
+            Value = 99.99m
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithCharComparison_ShouldHandleCharValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.CharValue == 'A';
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "CharValue",
+            PropertyType = typeof(char),
+            Operator = Operator.Equal,
+            Value = 65 // 'A' has ASCII value 65
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithCharRangeComparison_ShouldHandleCharRangeValues()
+    {
+        Expression<Func<TestEntity, bool>> predicate = x => x.CharValue >= 'A' && x.CharValue <= 'Z';
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Group
+        {
+            Operator = LogicalOperator.And,
+            Conditions =
+            [
+                new FilterNode<TestEntity>.Condition
+                {
+                    PropertyName = "CharValue",
+                    PropertyType = typeof(char),
+                    Operator = Operator.GreaterThanOrEqual,
+                    Value = 65 // 'A' has ASCII value 65
+                },
+                new FilterNode<TestEntity>.Condition
+                {
+                    PropertyName = "CharValue",
+                    PropertyType = typeof(char),
+                    Operator = Operator.LessThanOrEqual,
+                    Value = 90 // 'Z' has ASCII value 90
+                }
+            ]
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithMixedTypesInComplexExpression_ShouldHandleAllTypes()
+    {
+        var testGuid = Guid.NewGuid();
+        Expression<Func<TestEntity, bool>> predicate = x => 
+            x.Id == testGuid && 
+            x.Status == TestStatus.Active && 
+            x.Age > 18 && 
+            x.Rating >= 4.0 &&
+            x.IsActive;
+        
+        var result = FilterMapper.Map(predicate);
+
+        result.Should().BeOfType<FilterNode<TestEntity>.Group>();
+        var rootGroup = (FilterNode<TestEntity>.Group)result;
+        rootGroup.Operator.Should().Be(LogicalOperator.And);
+        
+        // The expression tree creates nested groups due to how && associates,
+        // so we need to flatten and find all conditions recursively
+        var allConditions = GetAllConditions(rootGroup);
+        allConditions.Should().HaveCount(5);
+
+        // Verify each condition type exists
+        var guidCondition = allConditions.FirstOrDefault(c => c.PropertyName == "Id");
+        guidCondition.Should().NotBeNull();
+        guidCondition!.PropertyType.Should().Be(typeof(Guid));
+        guidCondition.Value.Should().Be(testGuid);
+
+        var enumCondition = allConditions.FirstOrDefault(c => c.PropertyName == "Status");
+        enumCondition.Should().NotBeNull();
+        enumCondition!.PropertyType.Should().Be(typeof(TestStatus));
+        enumCondition.Value.Should().Be(1); // TestStatus.Active has underlying value 1
+
+        var intCondition = allConditions.FirstOrDefault(c => c.PropertyName == "Age");
+        intCondition.Should().NotBeNull();
+        intCondition!.PropertyType.Should().Be(typeof(int));
+        intCondition.Value.Should().Be(18);
+
+        var doubleCondition = allConditions.FirstOrDefault(c => c.PropertyName == "Rating");
+        doubleCondition.Should().NotBeNull();
+        doubleCondition!.PropertyType.Should().Be(typeof(double));
+        doubleCondition.Value.Should().Be(4.0);
+
+        var boolCondition = allConditions.FirstOrDefault(c => c.PropertyName == "IsActive");
+        boolCondition.Should().NotBeNull();
+        boolCondition!.PropertyType.Should().Be(typeof(bool));
+        boolCondition.Value.Should().Be(true);
+    }
+
+    private static List<FilterNode<TestEntity>.Condition> GetAllConditions(FilterNode<TestEntity> node)
+    {
+        var conditions = new List<FilterNode<TestEntity>.Condition>();
+        
+        switch (node)
+        {
+            case FilterNode<TestEntity>.Condition condition:
+                conditions.Add(condition);
+                break;
+            case FilterNode<TestEntity>.Group group:
+                foreach (var child in group.Conditions)
+                {
+                    conditions.AddRange(GetAllConditions(child));
+                }
+                break;
+        }
+        
+        return conditions;
+    }
+
+    [Fact]
+    public void Map_WithNumericTypesInCollection_ShouldHandleInOperator()
+    {
+        var validBytes = new byte[] { 1, 2, 3 };
+        var validShorts = new short[] { 100, 200, 300 };
+        var validLongs = new long[] { 1000L, 2000L, 3000L };
+        var validFloats = new float[] { 1.1f, 2.2f, 3.3f };
+        var validDecimals = new decimal[] { 10.5m, 20.5m, 30.5m };
+
+        Expression<Func<TestEntity, bool>> bytePredicate = x => validBytes.Contains(x.ByteValue);
+        Expression<Func<TestEntity, bool>> shortPredicate = x => validShorts.Contains(x.ShortValue);
+        Expression<Func<TestEntity, bool>> longPredicate = x => validLongs.Contains(x.LongValue);
+        Expression<Func<TestEntity, bool>> floatPredicate = x => validFloats.Contains(x.FloatValue);
+        Expression<Func<TestEntity, bool>> decimalPredicate = x => validDecimals.Contains(x.DecimalValue);
+
+        var byteResult = FilterMapper.Map(bytePredicate);
+        var shortResult = FilterMapper.Map(shortPredicate);
+        var longResult = FilterMapper.Map(longPredicate);
+        var floatResult = FilterMapper.Map(floatPredicate);
+        var decimalResult = FilterMapper.Map(decimalPredicate);
+
+        ((FilterNode<TestEntity>.Condition)byteResult).Operator.Should().Be(Operator.In);
+        ((FilterNode<TestEntity>.Condition)byteResult).PropertyType.Should().Be(typeof(byte));
+
+        ((FilterNode<TestEntity>.Condition)shortResult).Operator.Should().Be(Operator.In);
+        ((FilterNode<TestEntity>.Condition)shortResult).PropertyType.Should().Be(typeof(short));
+
+        ((FilterNode<TestEntity>.Condition)longResult).Operator.Should().Be(Operator.In);
+        ((FilterNode<TestEntity>.Condition)longResult).PropertyType.Should().Be(typeof(long));
+
+        ((FilterNode<TestEntity>.Condition)floatResult).Operator.Should().Be(Operator.In);
+        ((FilterNode<TestEntity>.Condition)floatResult).PropertyType.Should().Be(typeof(float));
+
+        ((FilterNode<TestEntity>.Condition)decimalResult).Operator.Should().Be(Operator.In);
+        ((FilterNode<TestEntity>.Condition)decimalResult).PropertyType.Should().Be(typeof(decimal));
+    }
+
     private class TestEntity
     {
         public int Age { get; set; }
@@ -1135,5 +1531,77 @@ public class FilterMapperTests
         public double Rating { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTimeOffset CreatedAtTz { get; set; }
+        public Guid Id { get; set; }
+        public TestStatus Status { get; set; }
+        public byte ByteValue { get; set; }
+        public short ShortValue { get; set; }
+        public long LongValue { get; set; }
+        public float FloatValue { get; set; }
+        public decimal DecimalValue { get; set; }
+        public char CharValue { get; set; }
+        public TestStatus? NullableStatus { get; set; }
+    }
+
+    private enum TestStatus
+    {
+        Pending = 0,
+        Active = 1,
+        Inactive = 2,
+        Completed = 3
+    }
+
+    [Fact]
+    public void Map_WithStringSerializedEnum_ShouldWorkCorrectly()
+    {
+        // Test that the FilterMapper still works correctly for string-serialized enums
+        // (The actual string vs integer serialization is handled in the WHERE clause builders)
+        Expression<Func<TestEntity, bool>> predicate = x => x.Status == TestStatus.Active;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "Status",
+            PropertyType = typeof(TestStatus),
+            Operator = Operator.Equal,
+            Value = 1 // FilterMapper always converts enums to integers
+        };
+
+        result.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Map_WithStringSerializedEnumCollection_ShouldWorkCorrectly()
+    {
+        // Test that the FilterMapper still works correctly for string-serialized enum collections
+        var validStatuses = new[] { TestStatus.Active, TestStatus.Completed };
+        Expression<Func<TestEntity, bool>> predicate = x => validStatuses.Contains(x.Status);
+        var result = FilterMapper.Map(predicate);
+
+        var condition = result.Should().BeOfType<FilterNode<TestEntity>.Condition>().Subject;
+        condition.PropertyName.Should().Be("Status");
+        condition.PropertyType.Should().Be(typeof(TestStatus));
+        condition.Operator.Should().Be(Operator.In);
+        
+        // FilterMapper keeps the original enum collection (conversion happens in WHERE clause builders)
+        var expectedValues = new[] { TestStatus.Active, TestStatus.Completed };
+        condition.Value.Should().BeEquivalentTo(expectedValues);
+    }
+
+    [Fact]
+    public void Map_WithNullableStringSerializedEnum_ShouldWorkCorrectly()
+    {
+        // Test nullable enum handling for string serialization
+        Expression<Func<TestEntity, bool>> predicate = x => x.NullableStatus == TestStatus.Active;
+        var result = FilterMapper.Map(predicate);
+
+        var expected = new FilterNode<TestEntity>.Condition
+        {
+            PropertyName = "NullableStatus",
+            PropertyType = typeof(TestStatus?),
+            Operator = Operator.Equal,
+            Value = 1 // FilterMapper always converts enums to integers
+        };
+
+        result.Should().BeEquivalentTo(expected);
     }
 }
