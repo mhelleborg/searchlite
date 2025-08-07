@@ -66,7 +66,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = Operator.Equal,
                 Value = true
             };
@@ -103,6 +103,30 @@ public static class FilterMapper
             var valueExpression = isLeftSide ? node.Right : node.Left;
             var value = Expression.Lambda(valueExpression).Compile().DynamicInvoke();
 
+            // Handle enum serialization based on the property's type (not the value's type)
+            if (value != null)
+            {
+                var propertyType = propertyInfo.PropertyType;
+                var underlyingPropertyType = propertyType != null ? (Nullable.GetUnderlyingType(propertyType) ?? propertyType) : null;
+                
+                if (underlyingPropertyType != null && underlyingPropertyType.IsEnum)
+                {
+                    var format = EnumSerializationAnalyzer.GetPropertyFormat(propertyInfo);
+                    
+                    if (format == EnumSerializationFormat.String)
+                    {
+                        // Convert the integer value to enum then to string
+                        var enumValue = Enum.ToObject(underlyingPropertyType, value);
+                        value = enumValue.ToString();
+                    }
+                    else
+                    {
+                        // Keep as integer (ensure it's the right integer type)
+                        value = Convert.ChangeType(value, underlyingPropertyType.GetEnumUnderlyingType());
+                    }
+                }
+            }
+
             // Handle null comparisons specially
             if (value == null)
             {
@@ -116,7 +140,7 @@ public static class FilterMapper
                 return new FilterNode<T>.Condition
                 {
                     PropertyName = propertyInfo.Name,
-                    PropertyType = propertyInfo.PropertyType,
+                    PropertyType = propertyInfo.PropertyType!,
                     Operator = nullOperator,
                     Value = true // Use true as a placeholder since we don't need the actual value for null checks
                 };
@@ -128,7 +152,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = value!
             };
@@ -159,6 +183,26 @@ public static class FilterMapper
         {
             var compareValue = Expression.Lambda(methodCall.Arguments[0]).Compile().DynamicInvoke();
 
+            // Handle enum serialization based on the property's serialization format
+            if (compareValue != null)
+            {
+                var valueType = compareValue.GetType();
+                var underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
+                
+                if (underlyingType.IsEnum)
+                {
+                    var format = EnumSerializationAnalyzer.GetPropertyFormat(propertyInfo);
+                    if (format == EnumSerializationFormat.String)
+                    {
+                        compareValue = compareValue.ToString();
+                    }
+                    else
+                    {
+                        compareValue = Convert.ChangeType(compareValue, underlyingType.GetEnumUnderlyingType());
+                    }
+                }
+            }
+
             // CompareTo returns: < 0 if less, 0 if equal, > 0 if greater
             // We support: x.CompareTo(y) == 0, x.CompareTo(y) != 0, x.CompareTo(y) > 0, etc.
             
@@ -181,7 +225,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = compareValue!
             };
@@ -204,7 +248,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = stringValue
             };
@@ -306,7 +350,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = true
             };
@@ -327,7 +371,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = true
             };
@@ -505,7 +549,7 @@ public static class FilterMapper
             return new FilterNode<T>.Condition
             {
                 PropertyName = propertyInfo.Name,
-                PropertyType = propertyInfo.PropertyType,
+                PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = value!
             };
@@ -557,6 +601,27 @@ public static class FilterMapper
                 value = Expression.Lambda(method.Object!).Compile().DynamicInvoke();
             }
 
+            // Handle enum serialization based on the property's serialization format
+            if (memberExpression != null && value != null)
+            {
+                var enumPropertyInfo = (PropertyInfo)memberExpression.Member;
+                var valueType = value.GetType();
+                var underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
+                
+                if (underlyingType.IsEnum)
+                {
+                    var format = EnumSerializationAnalyzer.GetPropertyFormat(enumPropertyInfo);
+                    if (format == EnumSerializationFormat.String)
+                    {
+                        value = value.ToString();
+                    }
+                    else
+                    {
+                        value = Convert.ChangeType(value, underlyingType.GetEnumUnderlyingType());
+                    }
+                }
+            }
+
             if (memberExpression == null)
             {
                 throw new NotSupportedException($"Unsupported {method.Method.Name} usage - one operand must be a property");
@@ -569,7 +634,7 @@ public static class FilterMapper
                 nameof(object.Equals) => new FilterNode<T>.Condition
                 {
                     PropertyName = propertyInfo.Name,
-                    PropertyType = propertyInfo.PropertyType,
+                    PropertyType = propertyInfo.PropertyType!,
                     Operator = Operator.Equal,
                     Value = value!
                 },
@@ -601,6 +666,27 @@ public static class FilterMapper
                     value = Expression.Lambda(method.Object!).Compile().DynamicInvoke();
                 }
 
+                // Handle enum serialization based on the property's serialization format
+                if (memberExpression != null && value != null)
+                {
+                    var enumPropertyInfo = (PropertyInfo)memberExpression.Member;
+                    var valueType = value.GetType();
+                    var underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
+                    
+                    if (underlyingType.IsEnum)
+                    {
+                        var format = EnumSerializationAnalyzer.GetPropertyFormat(enumPropertyInfo);
+                        if (format == EnumSerializationFormat.String)
+                        {
+                            value = value.ToString();
+                        }
+                        else
+                        {
+                            value = Convert.ChangeType(value, underlyingType.GetEnumUnderlyingType());
+                        }
+                    }
+                }
+
                 if (memberExpression == null)
                 {
                     throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage - one operand must be a property");
@@ -611,7 +697,7 @@ public static class FilterMapper
                 return new FilterNode<T>.Condition
                 {
                     PropertyName = propertyInfo.Name,
-                    PropertyType = propertyInfo.PropertyType,
+                    PropertyType = propertyInfo.PropertyType!,
                     Operator = Operator.NotEqual,
                     Value = value!
                 };

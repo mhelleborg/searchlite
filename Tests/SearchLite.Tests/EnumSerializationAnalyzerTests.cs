@@ -48,6 +48,14 @@ namespace SearchLite.Tests
         Two,
         Three
     }
+    
+    [JsonConverter(typeof(CustomIntegerEnumConverter<CustomIntConverterEnum>))]
+    public enum CustomIntConverterEnum
+    {
+        One,
+        Two,
+        Three
+    }
 
     // Test classes with various property configurations
     public class TestModel
@@ -102,6 +110,16 @@ namespace SearchLite.Tests
 
                 // Assert
                 format.Should().Be(EnumSerializationFormat.String);
+            }
+            
+            [Fact]
+            public void CustomConverterEnum_ShouldRecognize_CustomIntegerConverter()
+            {
+                // Act
+                var format = EnumSerializationAnalyzer<CustomIntConverterEnum>.DefaultFormat;
+
+                // Assert
+                format.Should().Be(EnumSerializationFormat.Integer);
             }
         }
 

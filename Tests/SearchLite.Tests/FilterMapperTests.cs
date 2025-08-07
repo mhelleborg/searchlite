@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Text.Json.Serialization;
 using FluentAssertions;
 
 namespace SearchLite.Tests;
@@ -1540,6 +1541,7 @@ public class FilterMapperTests
         public decimal DecimalValue { get; set; }
         public char CharValue { get; set; }
         public TestStatus? NullableStatus { get; set; }
+        public Mood Mood { get; set; }
     }
 
     private enum TestStatus
@@ -1549,21 +1551,30 @@ public class FilterMapperTests
         Inactive = 2,
         Completed = 3
     }
+    
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum Mood
+    {
+        Happy,
+        Sad,
+        Angry,
+        Excited
+    }
 
     [Fact]
     public void Map_WithStringSerializedEnum_ShouldWorkCorrectly()
     {
         // Test that the FilterMapper still works correctly for string-serialized enums
         // (The actual string vs integer serialization is handled in the WHERE clause builders)
-        Expression<Func<TestEntity, bool>> predicate = x => x.Status == TestStatus.Active;
+        Expression<Func<TestEntity, bool>> predicate = x => x.Mood == Mood.Excited;
         var result = FilterMapper.Map(predicate);
 
         var expected = new FilterNode<TestEntity>.Condition
         {
-            PropertyName = "Status",
-            PropertyType = typeof(TestStatus),
+            PropertyName = nameof(TestEntity.Mood),
+            PropertyType = typeof(Mood),
             Operator = Operator.Equal,
-            Value = 1 // FilterMapper always converts enums to integers
+            Value = nameof(Mood.Excited)
         };
 
         result.Should().BeEquivalentTo(expected);

@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using System.Text.Json.Serialization;
 using FluentAssertions;
 using SearchLite.Sqlite;
 
@@ -6,6 +7,19 @@ namespace SearchLite.Tests.Sqlite;
 
 public class WhereClauseTests
 {
+    public enum TestEnum
+    {
+        Value1,
+        Value2
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum TestStringEnum
+    {
+        String1,
+        String2
+    }
+
     public class TestModel
     {
         public int Age { get; set; }
@@ -14,6 +28,8 @@ public class WhereClauseTests
         public double Score { get; set; }
         public decimal Price { get; set; }
         public DateTime CreatedAt { get; set; }
+        public TestEnum EnumValue { get; set; }
+        public TestStringEnum StringEnumValue { get; set; }
     }
 
     [Fact]
@@ -24,6 +40,26 @@ public class WhereClauseTests
         clause.Sql.Should().Be("CAST(json_extract(document, '$.Age') AS INTEGER) > @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(18);
+    }
+
+    [Fact]
+    public void Should_Handle_Enum_Comparison()
+    {
+        var clause = BuildClause(x => x.EnumValue == TestEnum.Value2);
+
+        clause.Sql.Should().Be("CAST(json_extract(document, '$.EnumValue') AS INTEGER) = @p0");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be((int)TestEnum.Value2);
+    }
+
+    [Fact]
+    public void Should_Handle_String_Enum_Comparison()
+    {
+        var clause = BuildClause(x => x.StringEnumValue == TestStringEnum.String2);
+
+        clause.Sql.Should().Be("CAST(json_extract(document, '$.StringEnumValue') AS TEXT) = @p0");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be(TestStringEnum.String2.ToString());
     }
 
     [Fact]

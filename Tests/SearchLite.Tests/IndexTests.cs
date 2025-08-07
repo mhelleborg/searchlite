@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json.Serialization;
 using FluentAssertions;
 
 namespace SearchLite.Tests;
@@ -33,8 +34,40 @@ public abstract partial class IndexTests
         public string? Tags { get; init; }
         public int Views { get; init; }
         public DateTime CreatedAt { get; set; }
+        public Guid UniqueId { get; init; } = Guid.NewGuid();
+        public DocumentStatus Status { get; init; } = DocumentStatus.Draft;
+        
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public Priority? CurrentPriority { get; init; }
+        
+        public DangerZone DangerLevel { get; init; } = DangerZone.Low;
 
         public string GetSearchText() => $"{Title} {Content} {Description} {Tags}";
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum DocumentStatus
+    {
+        Draft = 0,
+        Published = 1,
+        Archived = 2,
+        Deleted = 3
+    }
+
+    public enum Priority
+    {
+        Low = 1,
+        Medium = 2,
+        High = 3,
+        Critical = 4
+    }
+    
+    public enum DangerZone
+    {
+        Low = 5,
+        Medium = 20,
+        High = 100,
+        Archer = 1000
     }
 
     [Fact]
@@ -1279,5 +1312,179 @@ public abstract partial class IndexTests
             .Where(d => !string.IsNullOrEmpty(d.Description));
         var notNullOrEmptyResult = await Index.SearchAsync(notNullOrEmptyRequest);
         notNullOrEmptyResult.Results.Should().HaveCount(4); // docs 3, 4, 5, 6
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithGuidFilter_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var guid1 = Guid.NewGuid();
+        var guid2 = Guid.NewGuid(); 
+        var guid3 = Guid.NewGuid();
+        
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc1", UniqueId = guid1, Status = DocumentStatus.Draft },
+            new TestDocument { Id = "2", Title = "Doc2", UniqueId = guid2, Status = DocumentStatus.Published },
+            new TestDocument { Id = "3", Title = "Doc3", UniqueId = guid3, Status = DocumentStatus.Archived }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Test GUID equality
+        var guidEqualRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.UniqueId == guid1);
+        var guidEqualResult = await Index.SearchAsync(guidEqualRequest);
+        guidEqualResult.Results.Should().HaveCount(1);
+        guidEqualResult.Results[0].Document!.Id.Should().Be("1");
+
+        // Test GUID inequality
+        var guidNotEqualRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.UniqueId != guid1);
+        var guidNotEqualResult = await Index.SearchAsync(guidNotEqualRequest);
+        guidNotEqualResult.Results.Should().HaveCount(2);
+        guidNotEqualResult.Results.Should().NotContain(r => r.Document!.Id == "1");
+
+        // Test GUID in collection
+        var guidCollection = new[] { guid1, guid3 };
+        var guidInRequest = new SearchRequest<TestDocument>()
+            .Where(d => guidCollection.Contains(d.UniqueId));
+        var guidInResult = await Index.SearchAsync(guidInRequest);
+        guidInResult.Results.Should().HaveCount(2);
+        guidInResult.Results.Should().OnlyContain(r => r.Document!.Id == "1" || r.Document!.Id == "3");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithEnumFilter_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc1", Status = DocumentStatus.Draft, CurrentPriority = Priority.Low },
+            new TestDocument { Id = "2", Title = "Doc2", Status = DocumentStatus.Published, CurrentPriority = Priority.High },
+            new TestDocument { Id = "3", Title = "Doc3", Status = DocumentStatus.Archived, CurrentPriority = Priority.Medium },
+            new TestDocument { Id = "4", Title = "Doc4", Status = DocumentStatus.Published, CurrentPriority = null },
+            new TestDocument { Id = "5", Title = "Doc5", Status = DocumentStatus.Deleted, CurrentPriority = Priority.Critical }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Test enum equality
+        var enumEqualRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.Status == DocumentStatus.Published);
+        var enumEqualResult = await Index.SearchAsync(enumEqualRequest);
+        enumEqualResult.Results.Should().HaveCount(2);
+        enumEqualResult.Results.Should().OnlyContain(r => r.Document!.Id == "2" || r.Document!.Id == "4");
+
+        // Test enum inequality
+        var enumNotEqualRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.Status != DocumentStatus.Draft);
+        var enumNotEqualResult = await Index.SearchAsync(enumNotEqualRequest);
+        enumNotEqualResult.Results.Should().HaveCount(4);
+        enumNotEqualResult.Results.Should().NotContain(r => r.Document!.Id == "1");
+
+        // Test enum in collection
+        var statusCollection = new[] { DocumentStatus.Published, DocumentStatus.Archived };
+        var enumInRequest = new SearchRequest<TestDocument>()
+            .Where(d => statusCollection.Contains(d.Status));
+        var enumInResult = await Index.SearchAsync(enumInRequest);
+        enumInResult.Results.Should().HaveCount(3);
+        enumInResult.Results.Should().OnlyContain(r => r.Document!.Id == "2" || r.Document!.Id == "3" || r.Document!.Id == "4");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithNullableEnumFilter_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc1", Status = DocumentStatus.Draft, CurrentPriority = Priority.Low },
+            new TestDocument { Id = "2", Title = "Doc2", Status = DocumentStatus.Published, CurrentPriority = Priority.High },
+            new TestDocument { Id = "3", Title = "Doc3", Status = DocumentStatus.Archived, CurrentPriority = null },
+            new TestDocument { Id = "4", Title = "Doc4", Status = DocumentStatus.Published, CurrentPriority = null }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Test nullable enum equality
+        var nullableEnumEqualRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.CurrentPriority == Priority.High);
+        var nullableEnumEqualResult = await Index.SearchAsync(nullableEnumEqualRequest);
+        nullableEnumEqualResult.Results.Should().HaveCount(1);
+        nullableEnumEqualResult.Results[0].Document!.Id.Should().Be("2");
+
+        // Test nullable enum null comparison
+        var nullableEnumNullRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.CurrentPriority == null);
+        var nullableEnumNullResult = await Index.SearchAsync(nullableEnumNullRequest);
+        nullableEnumNullResult.Results.Should().HaveCount(2);
+        nullableEnumNullResult.Results.Should().OnlyContain(r => r.Document!.Id == "3" || r.Document!.Id == "4");
+
+        // Test nullable enum not null comparison
+        var nullableEnumNotNullRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.CurrentPriority != null);
+        var nullableEnumNotNullResult = await Index.SearchAsync(nullableEnumNotNullRequest);
+        nullableEnumNotNullResult.Results.Should().HaveCount(2);
+        nullableEnumNotNullResult.Results.Should().OnlyContain(r => r.Document!.Id == "1" || r.Document!.Id == "2");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithComplexGuidAndEnumFilter_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var guid1 = Guid.NewGuid();
+        var guid2 = Guid.NewGuid();
+        
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc1", UniqueId = guid1, Status = DocumentStatus.Published, CurrentPriority = Priority.High },
+            new TestDocument { Id = "2", Title = "Doc2", UniqueId = guid2, Status = DocumentStatus.Published, CurrentPriority = Priority.Low },
+            new TestDocument { Id = "3", Title = "Doc3", UniqueId = Guid.NewGuid(), Status = DocumentStatus.Draft, CurrentPriority = Priority.High },
+            new TestDocument { Id = "4", Title = "Doc4", UniqueId = Guid.NewGuid(), Status = DocumentStatus.Archived, CurrentPriority = null }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Test complex filter: Published status AND (specific GUID OR high priority)
+        var complexRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.Status == DocumentStatus.Published && 
+                       (d.UniqueId == guid1 || d.CurrentPriority == Priority.High));
+        var complexResult = await Index.SearchAsync(complexRequest);
+        complexResult.Results.Should().HaveCount(1);
+        complexResult.Results[0].Document!.Id.Should().Be("1");
+
+        // Test complex filter with collections
+        var guidCollection = new[] { guid1, guid2 };
+        var statusCollection = new[] { DocumentStatus.Published, DocumentStatus.Draft };
+        var collectionRequest = new SearchRequest<TestDocument>()
+            .Where(d => guidCollection.Contains(d.UniqueId) && 
+                       statusCollection.Contains(d.Status));
+        var collectionResult = await Index.SearchAsync(collectionRequest);
+        collectionResult.Results.Should().HaveCount(2);
+        collectionResult.Results.Should().OnlyContain(r => r.Document!.Id == "1" || r.Document!.Id == "2");
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithIntBasedEnumFilter_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var docs = new[]
+        {
+            new TestDocument { Id = "1", Title = "Doc1", DangerLevel = DangerZone.Low },
+            new TestDocument { Id = "2", Title = "Doc2", DangerLevel = DangerZone.Medium },
+            new TestDocument { Id = "3", Title = "Doc3", DangerLevel = DangerZone.High },
+            new TestDocument { Id = "4", Title = "Doc4", DangerLevel = DangerZone.Archer }
+        };
+        await Index.IndexManyAsync(docs);
+
+        // Test enum equality
+        var enumEqualRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.DangerLevel == DangerZone.High);
+        var enumEqualResult = await Index.SearchAsync(enumEqualRequest);
+        enumEqualResult.Results.Should().HaveCount(1);
+        enumEqualResult.Results[0].Document!.Id.Should().Be("3");
+
+        // Test enum greater than
+        var enumGreaterRequest = new SearchRequest<TestDocument>()
+            .Where(d => d.DangerLevel > DangerZone.Medium);
+        var enumGreaterResult = await Index.SearchAsync(enumGreaterRequest);
+        enumGreaterResult.Results.Should().HaveCount(2);
+        enumGreaterResult.Results.Select(r => r.Id).Should().BeEquivalentTo("3", "4");
     }
 }

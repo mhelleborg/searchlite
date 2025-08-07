@@ -1,4 +1,4 @@
-﻿using Microsoft.Data.Sqlite;
+using Microsoft.Data.Sqlite;
 
 namespace SearchLite.Sqlite;
 
@@ -62,52 +62,102 @@ public static class WhereClauseBuilder<T>
     private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
         List<SqliteParameter> parameters)
     {
-        // Handle null checks first
         if (IsNullOperator(condition.Operator))
         {
             return BuildNullCondition(condition.PropertyName, condition.Operator);
         }
 
-        // Handle string null/empty checks differently
         if (IsStringNullOrEmptyOperator(condition.Operator))
         {
             return BuildStringNullOrEmptyCondition(condition.PropertyName, condition.Operator);
         }
 
-        // Handle Contains and In operators
         if (IsSetOperator(condition.Operator))
         {
             return BuildSetCondition(condition, ref paramCounter, parameters);
         }
 
-        // Handle string operators (Contains, StartsWith, EndsWith and their variants)
         if (IsStringOperator(condition.Operator))
         {
             return BuildStringCondition(condition, ref paramCounter, parameters);
         }
 
-        var sqliteType = GetSqliteType(condition.PropertyType);
+        var sqliteType = GetSqliteType(condition.PropertyType, condition.PropertyName);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"@p{paramCounter++}";
 
-        parameters.Add(new SqliteParameter(paramName, condition.Value));
+        object? paramValue = condition.Value;
+        var underlyingType = Nullable.GetUnderlyingType(condition.PropertyType) ?? condition.PropertyType;
 
-        // Use json_extract with proper CAST for Sqlite
-        return
-            $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {sqliteType}) {operatorString} {paramName}";
+        if (underlyingType.IsEnum)
+        {
+            var prop = typeof(T).GetProperty(condition.PropertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
+            EnumSerializationFormat format;
+            if (prop != null)
+            {
+                format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
+            }
+            else
+            {
+                format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+            }
+            
+            if (format == EnumSerializationFormat.String)
+            {
+                paramValue = condition.Value?.ToString();
+            }
+            else
+            {
+                if(condition.Value != null)
+                    paramValue = Convert.ChangeType(condition.Value, underlyingType.GetEnumUnderlyingType());
+            }
+        }
+        else if (underlyingType == typeof(Guid))
+        {
+            paramValue = condition.Value?.ToString();
+        }
+
+        parameters.Add(new SqliteParameter(paramName, paramValue ?? DBNull.Value));
+
+        return $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {sqliteType}) {operatorString} {paramName}";
     }
 
-    private static string GetSqliteType(Type type)
+    private static string GetSqliteType(Type type, string propertyName)
     {
-        return type switch
+        var underlyingType = Nullable.GetUnderlyingType(type) ?? type;
+
+        if (underlyingType.IsEnum)
+        {
+            var prop = typeof(T).GetProperty(propertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
+            EnumSerializationFormat format;
+            if (prop != null)
+            {
+                format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
+            }
+            else
+            {
+                format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+            }
+            
+            return format == EnumSerializationFormat.String ? "TEXT" : "INTEGER";
+        }
+
+        return underlyingType switch
         {
             { } t when t == typeof(int) => "INTEGER",
             { } t when t == typeof(string) => "TEXT",
-            { } t when t == typeof(bool) => "INTEGER", // Sqlite doesn't have a native boolean type
+            { } t when t == typeof(bool) => "INTEGER",
             { } t when t == typeof(double) => "REAL",
             { } t when t == typeof(decimal) => "REAL",
-            { } t when t == typeof(DateTime) => "TEXT", // Sqlite stores dates as TEXT, REAL, or INTEGER
-            _ => throw new NotSupportedException($"Type {type} is not supported")
+            { } t when t == typeof(DateTime) => "TEXT",
+            { } t when t == typeof(DateTimeOffset) => "TEXT",
+            { } t when t == typeof(Guid) => "TEXT",
+            { } t when t == typeof(byte) => "INTEGER",
+            { } t when t == typeof(short) => "INTEGER",
+            { } t when t == typeof(long) => "INTEGER",
+            { } t when t == typeof(float) => "REAL",
+            { } t when t == typeof(char) => "INTEGER",
+            _ => throw new NotSupportedException($"Type {underlyingType} is not supported")
         };
     }
 
@@ -127,7 +177,7 @@ public static class WhereClauseBuilder<T>
 
     private static bool IsStringNullOrEmptyOperator(Operator op)
     {
-        return op is Operator.IsNullOrEmpty or Operator.IsNotNullOrEmpty or 
+        return op is Operator.IsNullOrEmpty or Operator.IsNotNullOrEmpty or
                      Operator.IsNullOrWhiteSpace or Operator.IsNotNullOrWhiteSpace;
     }
 
@@ -139,7 +189,7 @@ public static class WhereClauseBuilder<T>
     private static string BuildNullCondition(string propertyName, Operator op)
     {
         var fieldExpression = $"json_extract(document, '$.{propertyName}')";
-        
+
         return op switch
         {
             Operator.IsNull => $"{fieldExpression} IS NULL",
@@ -151,12 +201,11 @@ public static class WhereClauseBuilder<T>
     private static string BuildStringNullOrEmptyCondition(string propertyName, Operator op)
     {
         var fieldExpression = $"CAST(json_extract(document, '$.{propertyName}') AS TEXT)";
-        
+
         return op switch
         {
             Operator.IsNullOrEmpty => $"({fieldExpression} IS NULL OR {fieldExpression} = '')",
             Operator.IsNotNullOrEmpty => $"({fieldExpression} IS NOT NULL AND {fieldExpression} != '')",
-            // Use replace to handle various whitespace characters like .NET's IsNullOrWhiteSpace
             Operator.IsNullOrWhiteSpace => $"({fieldExpression} IS NULL OR trim(replace(replace(replace({fieldExpression}, char(9), ' '), char(10), ' '), char(13), ' ')) = '')",
             Operator.IsNotNullOrWhiteSpace => $"({fieldExpression} IS NOT NULL AND trim(replace(replace(replace({fieldExpression}, char(9), ' '), char(10), ' '), char(13), ' ')) != '')",
             _ => throw new NotSupportedException($"String operator {op} is not supported")
@@ -180,14 +229,12 @@ public static class WhereClauseBuilder<T>
 
     private static string BuildSetCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
     {
-        var fieldExpression = condition.PropertyType == typeof(string) 
-            ? $"CAST(json_extract(document, '$.{condition.PropertyName}') AS TEXT)"
-            : $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {GetSqliteType(condition.PropertyType)})";
+        var fieldExpression = $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {GetSqliteType(condition.PropertyType, condition.PropertyName)})";
 
         return condition.Operator switch
         {
-            Operator.In => BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters),
-            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters)})",
+            Operator.In => BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName),
+            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName)})",
             _ => throw new NotSupportedException($"Set operator {condition.Operator} is not supported")
         };
     }
@@ -221,12 +268,11 @@ public static class WhereClauseBuilder<T>
         return $"{fieldExpression} GLOB {paramName}";
     }
 
-    private static string BuildInCondition(string fieldExpression, object value, ref int paramCounter, List<SqliteParameter> parameters)
+    private static string BuildInCondition(string fieldExpression, object? value, ref int paramCounter, List<SqliteParameter> parameters, Type? propertyType = null, string? propertyName = null)
     {
-        // Handle collections (arrays, lists, etc.)
         if (value is System.Collections.IEnumerable enumerable and not string)
         {
-            var values = new List<object>();
+            var values = new List<object?>();
             foreach (var item in enumerable)
             {
                 values.Add(item);
@@ -234,23 +280,60 @@ public static class WhereClauseBuilder<T>
 
             if (values.Count == 0)
             {
-                return "1 = 0"; // Always false condition
+                return "1 = 0";
             }
 
             var paramNames = new List<string>();
             foreach (var item in values)
             {
                 var paramName = $"@p{paramCounter++}";
-                parameters.Add(new SqliteParameter(paramName, item));
+                object? paramValue = item;
+
+                var underlyingType = propertyType != null ? Nullable.GetUnderlyingType(propertyType) ?? propertyType : null;
+
+                if (underlyingType != null && underlyingType.IsEnum)
+                {
+                    var prop = typeof(T).GetProperty(propertyName ?? string.Empty, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
+                    EnumSerializationFormat format;
+                    if (prop != null)
+                    {
+                        format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
+                    }
+                    else
+                    {
+                        format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+                    }
+                    
+                    if (format == EnumSerializationFormat.String)
+                    {
+                        paramValue = item?.ToString();
+                    }
+                    else
+                    {
+                        if (item != null)
+                            paramValue = Convert.ChangeType(item, underlyingType.GetEnumUnderlyingType());
+                    }
+                }
+                else if (underlyingType == typeof(Guid))
+                {
+                    paramValue = item?.ToString();
+                }
+
+                parameters.Add(new SqliteParameter(paramName, paramValue ?? DBNull.Value));
                 paramNames.Add(paramName);
             }
 
             return $"{fieldExpression} IN ({string.Join(", ", paramNames)})";
         }
 
-        // Single value (fallback)
         var singleParamName = $"@p{paramCounter++}";
-        parameters.Add(new SqliteParameter(singleParamName, value));
+        object? singleParamValue = value;
+        if (propertyType == typeof(Guid) || propertyType == typeof(Guid?))
+        {
+            singleParamValue = value?.ToString() ?? "";
+        }
+
+        parameters.Add(new SqliteParameter(singleParamName, singleParamValue ?? DBNull.Value));
         return $"{fieldExpression} = {singleParamName}";
     }
 
