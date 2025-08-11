@@ -19,16 +19,9 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents with Views in [200, 400]
+        // Act & Assert - Find documents with Views in [200, 400]
         var validViews = new[] { 200, 400 };
-        var request = new SearchRequest<TestDocument>().Where(d => validViews.Contains(d.Views));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "2", "4" });
-        result.Results.Select(r => r.Document!.Views).Should().BeEquivalentTo(new[] { 200, 400 });
+        await ShouldReturnSameResultsAsLinq(docs, d => validViews.Contains(d.Views), 2);
     }
 
     [Fact]
@@ -45,16 +38,9 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents with Views NOT in [200, 400]
+        // Act & Assert - Find documents with Views NOT in [200, 400]
         var excludedViews = new[] { 200, 400 };
-        var request = new SearchRequest<TestDocument>().Where(d => !excludedViews.Contains(d.Views));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(3);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "3", "5" });
-        result.Results.Select(r => r.Document!.Views).Should().BeEquivalentTo(new[] { 100, 300, 500 });
+        await ShouldReturnSameResultsAsLinq(docs, d => !excludedViews.Contains(d.Views), 3);
     }
 
     [Fact]
@@ -71,16 +57,9 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents with Title in ["Alpha", "Gamma", "Epsilon"]
+        // Act & Assert - Find documents with Title in ["Alpha", "Gamma", "Epsilon"]
         var validTitles = new List<string> { "Alpha", "Gamma", "Epsilon" };
-        var request = new SearchRequest<TestDocument>().Where(d => validTitles.Contains(d.Title));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(3);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "3", "5" });
-        result.Results.Select(r => r.Document!.Title).Should().BeEquivalentTo(new[] { "Alpha", "Gamma", "Epsilon" });
+        await ShouldReturnSameResultsAsLinq(docs, d => validTitles.Contains(d.Title), 3);
     }
 
     [Fact]
@@ -96,16 +75,9 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents using Enumerable.Contains
+        // Act & Assert - Find documents using Enumerable.Contains
         var targetViews = new[] { 20, 40 };
-        var request = new SearchRequest<TestDocument>().Where(d => Enumerable.Contains(targetViews, d.Views));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "2", "4" });
-        result.Results.Select(r => r.Document!.Views).Should().BeEquivalentTo(new[] { 20, 40 });
+        await ShouldReturnSameResultsAsLinq(docs, d => Enumerable.Contains(targetViews, d.Views), 2);
     }
     
     [Fact]
@@ -122,17 +94,10 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents using Enumerable.Contains
+        // Act & Assert - Find documents using Enumerable.Contains
         var targetViews = new[] { 20 };
         var targetViews2 = new[] { 40, 50 };
-        var request = new SearchRequest<TestDocument>().Where(d => targetViews.Contains(d.Views) || targetViews2.Contains(d.Views));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(3);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo("2", "4", "5");
-        result.Results.Select(r => r.Document!.Views).Should().BeEquivalentTo([20, 40, 50]);
+        await ShouldReturnSameResultsAsLinq(docs, d => targetViews.Contains(d.Views) || targetViews2.Contains(d.Views), 3);
     }
 
     [Fact]
@@ -149,15 +114,9 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents with (Views in [200, 400]) AND (Description is null)
+        // Act & Assert - Find documents with (Views in [200, 400]) AND (Description is null)
         var targetViews = new[] { 200, 400 };
-        var request = new SearchRequest<TestDocument>().Where(d => 
-            targetViews.Contains(d.Views) && d.Description == null);
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "2", "4" });
+        await ShouldReturnSameResultsAsLinq(docs, d => 
+            targetViews.Contains(d.Views) && d.Description == null, 2);
     }
 }

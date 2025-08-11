@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using System.Text.Json.Serialization;
 using FluentAssertions;
 
@@ -29,6 +30,8 @@ public abstract partial class IndexTests
     {
         public required string Id { get; init; }
         public required string Title { get; init; }
+        public bool IsRegistered { get; init; } = false;
+        public bool? Valid { get; init; }
         public string Content { get; init; } = "";
         public string? Description { get; init; }
         public string? Tags { get; init; }
@@ -36,10 +39,10 @@ public abstract partial class IndexTests
         public DateTime CreatedAt { get; set; }
         public Guid UniqueId { get; init; } = Guid.NewGuid();
         public DocumentStatus Status { get; init; } = DocumentStatus.Draft;
-        
+
         [JsonConverter(typeof(JsonStringEnumConverter))]
         public Priority? CurrentPriority { get; init; }
-        
+
         public DangerZone DangerLevel { get; init; } = DangerZone.Low;
 
         public string GetSearchText() => $"{Title} {Content} {Description} {Tags}";
@@ -61,7 +64,7 @@ public abstract partial class IndexTests
         High = 3,
         Critical = 4
     }
-    
+
     public enum DangerZone
     {
         Low = 5,
@@ -121,13 +124,10 @@ public abstract partial class IndexTests
             }
         };
         await Index.IndexManyAsync(docs);
-        // Act
-        var request = new SearchRequest<TestDocument>().Where(d => d.Views > 500);
-        var result = await Index.SearchAsync(request);
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().ContainSingle().Which.Document.Should().NotBeNull();
-        result.Results.Single().Id.Should().Be("1");
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Views > 500, 1);
+
+        var result = await Index.SearchAsync(new SearchRequest<TestDocument>().Where(d => d.Views > 500));
         result.Results.Single().LastUpdated.Should().BeAfter(before);
         result.TotalCount.Should().Be(result.Results.Count);
     }
@@ -772,15 +772,10 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Description is null or empty
-        var request = new SearchRequest<TestDocument>().Where(d => string.IsNullOrEmpty(d.Description));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "1", "2" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => string.IsNullOrEmpty(d.Description), 2);
     }
-    
+
     [Fact]
     public async Task SearchAsync_WithStringNotIsNullOrEmpty_ShouldFilterCorrectly()
     {
@@ -814,13 +809,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Description is null or empty
-        var request = new SearchRequest<TestDocument>().Where(d => !string.IsNullOrEmpty(d.Description));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "3", "4" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => !string.IsNullOrEmpty(d.Description), 2);
     }
 
     [Fact]
@@ -860,14 +850,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Description is null/empty OR Views > 250
-        var request = new SearchRequest<TestDocument>().Where(d =>
-            string.IsNullOrEmpty(d.Description) && d.Title == "it");
-        var result = await Index.SearchAsync(request);
-
-        // Assert - Should get docs 1, 2, and 4 (null/empty descriptions + high views)
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo("2", "4");
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => string.IsNullOrEmpty(d.Description) && d.Title == "it", 2);
     }
 
     [Fact]
@@ -907,14 +891,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Description is null/empty OR Views > 250
-        var request = new SearchRequest<TestDocument>().Where(d =>
-            d.Description == null && d.Title == "it");
-        var result = await Index.SearchAsync(request);
-
-        // Assert - Should get only doc 4 (null description + title == "it")
-        result.Results.Should().HaveCount(1);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "4" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Description == null && d.Title == "it", 1);
     }
 
     [Fact]
@@ -944,16 +922,11 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Description is NOT null
-        var request = new SearchRequest<TestDocument>().Where(d => d.Description != null);
-        var result = await Index.SearchAsync(request);
-
-        // Assert - Should get docs 1 and 3 (non-null descriptions)
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "1", "3" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Description != null, 2);
     }
 
-    
+
     [Fact]
     public async Task SearchAsync_WithComplexCompositeExpression_ShouldFilterCorrectly()
     {
@@ -1003,19 +976,11 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Complex expression: (High views AND has description) OR (Missing both description and tags)
-        var request = new SearchRequest<TestDocument>().Where(d =>
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d =>
             (d.Views > 800 && !string.IsNullOrWhiteSpace(d.Description)) ||
-            (string.IsNullOrEmpty(d.Description) && string.IsNullOrEmpty(d.Tags)));
-        var result = await Index.SearchAsync(request);
-
-        // Assert - Should get docs 1 (high views + description) and 4 (missing both)
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "1", "4" });
+            (string.IsNullOrEmpty(d.Description) && string.IsNullOrEmpty(d.Tags)), 2);
     }
-
-
-    
 
 
     [Fact]
@@ -1201,18 +1166,18 @@ public abstract partial class IndexTests
         // Assert
         result.Results.Should().HaveCount(5);
         var titles = result.Results.Select(r => r.Document!.Title).ToList();
-        
+
         // Verify that the database ordering is consistent and logical
         // Numbers should come first, then letters (the exact case order may vary by database)
         titles[0].Should().Be("123 numeric"); // Numbers first
-        
+
         // The remaining items should be alphabetically ordered (case rules may vary)
         var letterTitles = titles.Skip(1).ToList();
         letterTitles.Should().Contain("Apple");
-        letterTitles.Should().Contain("apple"); 
+        letterTitles.Should().Contain("apple");
         letterTitles.Should().Contain("Zebra");
         letterTitles.Should().Contain("zebra");
-        
+
         // Verify stable sort - results should be deterministic
         var secondResult = await Index.SearchAsync(request);
         var secondTitles = secondResult.Results.Select(r => r.Document!.Title).ToList();
@@ -1234,9 +1199,9 @@ public abstract partial class IndexTests
 
         // Act - Filter (Views > 50), Order by Views desc, Skip 3, Take 5
         var request = new SearchRequest<TestDocument>
-        {
-            Options = new SearchOptions { Skip = 3, Take = 5 }
-        }
+            {
+                Options = new SearchOptions { Skip = 3, Take = 5 }
+            }
             .Where(d => d.Views > 50)
             .OrderByDescending(d => d.Views)
             .OrderByAscending(d => d.Title);
@@ -1264,16 +1229,18 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Filter by string.IsNullOrEmpty, order by Views, paginate
+        // Act & Assert - Filter by string.IsNullOrEmpty, order by Views, paginate
+        await ShouldReturnSameResultsAsLinq(docs, d => string.IsNullOrEmpty(d.Description), 4);
+
         var request = new SearchRequest<TestDocument>
-        {
-            Options = new SearchOptions { Skip = 1, Take = 2 }
-        }
+            {
+                Options = new SearchOptions { Skip = 1, Take = 2 }
+            }
             .Where(d => string.IsNullOrEmpty(d.Description))
             .OrderByAscending(d => d.Views);
         var result = await Index.SearchAsync(request);
 
-        // Assert - Should find docs 1, 2, 4, 7 (null/empty description), skip first, take 2
+        // Assert pagination specific behavior
         result.Results.Should().HaveCount(2);
         result.TotalCount.Should().Be(4);
         result.Results[0].Document!.Id.Should().Be("2"); // Views = 200
@@ -1296,22 +1263,13 @@ public abstract partial class IndexTests
         await Index.IndexManyAsync(docs);
 
         // Test IsNullOrEmpty
-        var nullOrEmptyRequest = new SearchRequest<TestDocument>()
-            .Where(d => string.IsNullOrEmpty(d.Description));
-        var nullOrEmptyResult = await Index.SearchAsync(nullOrEmptyRequest);
-        nullOrEmptyResult.Results.Should().HaveCount(2); // docs 1, 2
+        await ShouldReturnSameResultsAsLinq(docs, d => string.IsNullOrEmpty(d.Description), 2);
 
         // Test IsNullOrWhiteSpace
-        var nullOrWhiteSpaceRequest = new SearchRequest<TestDocument>()
-            .Where(d => string.IsNullOrWhiteSpace(d.Tags));
-        var nullOrWhiteSpaceResult = await Index.SearchAsync(nullOrWhiteSpaceRequest);
-        nullOrWhiteSpaceResult.Results.Should().HaveCount(4); // docs 1, 2, 3, 4
+        await ShouldReturnSameResultsAsLinq(docs, d => string.IsNullOrWhiteSpace(d.Tags), 4);
 
         // Test negated IsNullOrEmpty
-        var notNullOrEmptyRequest = new SearchRequest<TestDocument>()
-            .Where(d => !string.IsNullOrEmpty(d.Description));
-        var notNullOrEmptyResult = await Index.SearchAsync(notNullOrEmptyRequest);
-        notNullOrEmptyResult.Results.Should().HaveCount(4); // docs 3, 4, 5, 6
+        await ShouldReturnSameResultsAsLinq(docs, d => !string.IsNullOrEmpty(d.Description), 4);
     }
 
     [Fact]
@@ -1319,9 +1277,9 @@ public abstract partial class IndexTests
     {
         // Arrange
         var guid1 = Guid.NewGuid();
-        var guid2 = Guid.NewGuid(); 
+        var guid2 = Guid.NewGuid();
         var guid3 = Guid.NewGuid();
-        
+
         var docs = new[]
         {
             new TestDocument { Id = "1", Title = "Doc1", UniqueId = guid1, Status = DocumentStatus.Draft },
@@ -1331,26 +1289,14 @@ public abstract partial class IndexTests
         await Index.IndexManyAsync(docs);
 
         // Test GUID equality
-        var guidEqualRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.UniqueId == guid1);
-        var guidEqualResult = await Index.SearchAsync(guidEqualRequest);
-        guidEqualResult.Results.Should().HaveCount(1);
-        guidEqualResult.Results[0].Document!.Id.Should().Be("1");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.UniqueId == guid1, 1);
 
         // Test GUID inequality
-        var guidNotEqualRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.UniqueId != guid1);
-        var guidNotEqualResult = await Index.SearchAsync(guidNotEqualRequest);
-        guidNotEqualResult.Results.Should().HaveCount(2);
-        guidNotEqualResult.Results.Should().NotContain(r => r.Document!.Id == "1");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.UniqueId != guid1, 2);
 
         // Test GUID in collection
         var guidCollection = new[] { guid1, guid3 };
-        var guidInRequest = new SearchRequest<TestDocument>()
-            .Where(d => guidCollection.Contains(d.UniqueId));
-        var guidInResult = await Index.SearchAsync(guidInRequest);
-        guidInResult.Results.Should().HaveCount(2);
-        guidInResult.Results.Should().OnlyContain(r => r.Document!.Id == "1" || r.Document!.Id == "3");
+        await ShouldReturnSameResultsAsLinq(docs, d => guidCollection.Contains(d.UniqueId), 2);
     }
 
     [Fact]
@@ -1359,35 +1305,27 @@ public abstract partial class IndexTests
         // Arrange
         var docs = new[]
         {
-            new TestDocument { Id = "1", Title = "Doc1", Status = DocumentStatus.Draft, CurrentPriority = Priority.Low },
-            new TestDocument { Id = "2", Title = "Doc2", Status = DocumentStatus.Published, CurrentPriority = Priority.High },
-            new TestDocument { Id = "3", Title = "Doc3", Status = DocumentStatus.Archived, CurrentPriority = Priority.Medium },
+            new TestDocument
+                { Id = "1", Title = "Doc1", Status = DocumentStatus.Draft, CurrentPriority = Priority.Low },
+            new TestDocument
+                { Id = "2", Title = "Doc2", Status = DocumentStatus.Published, CurrentPriority = Priority.High },
+            new TestDocument
+                { Id = "3", Title = "Doc3", Status = DocumentStatus.Archived, CurrentPriority = Priority.Medium },
             new TestDocument { Id = "4", Title = "Doc4", Status = DocumentStatus.Published, CurrentPriority = null },
-            new TestDocument { Id = "5", Title = "Doc5", Status = DocumentStatus.Deleted, CurrentPriority = Priority.Critical }
+            new TestDocument
+                { Id = "5", Title = "Doc5", Status = DocumentStatus.Deleted, CurrentPriority = Priority.Critical }
         };
         await Index.IndexManyAsync(docs);
 
         // Test enum equality
-        var enumEqualRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.Status == DocumentStatus.Published);
-        var enumEqualResult = await Index.SearchAsync(enumEqualRequest);
-        enumEqualResult.Results.Should().HaveCount(2);
-        enumEqualResult.Results.Should().OnlyContain(r => r.Document!.Id == "2" || r.Document!.Id == "4");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Status == DocumentStatus.Published, 2);
 
         // Test enum inequality
-        var enumNotEqualRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.Status != DocumentStatus.Draft);
-        var enumNotEqualResult = await Index.SearchAsync(enumNotEqualRequest);
-        enumNotEqualResult.Results.Should().HaveCount(4);
-        enumNotEqualResult.Results.Should().NotContain(r => r.Document!.Id == "1");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Status != DocumentStatus.Draft, 4);
 
         // Test enum in collection
         var statusCollection = new[] { DocumentStatus.Published, DocumentStatus.Archived };
-        var enumInRequest = new SearchRequest<TestDocument>()
-            .Where(d => statusCollection.Contains(d.Status));
-        var enumInResult = await Index.SearchAsync(enumInRequest);
-        enumInResult.Results.Should().HaveCount(3);
-        enumInResult.Results.Should().OnlyContain(r => r.Document!.Id == "2" || r.Document!.Id == "3" || r.Document!.Id == "4");
+        await ShouldReturnSameResultsAsLinq(docs, d => statusCollection.Contains(d.Status), 3);
     }
 
     [Fact]
@@ -1396,33 +1334,23 @@ public abstract partial class IndexTests
         // Arrange
         var docs = new[]
         {
-            new TestDocument { Id = "1", Title = "Doc1", Status = DocumentStatus.Draft, CurrentPriority = Priority.Low },
-            new TestDocument { Id = "2", Title = "Doc2", Status = DocumentStatus.Published, CurrentPriority = Priority.High },
+            new TestDocument
+                { Id = "1", Title = "Doc1", Status = DocumentStatus.Draft, CurrentPriority = Priority.Low },
+            new TestDocument
+                { Id = "2", Title = "Doc2", Status = DocumentStatus.Published, CurrentPriority = Priority.High },
             new TestDocument { Id = "3", Title = "Doc3", Status = DocumentStatus.Archived, CurrentPriority = null },
             new TestDocument { Id = "4", Title = "Doc4", Status = DocumentStatus.Published, CurrentPriority = null }
         };
         await Index.IndexManyAsync(docs);
 
         // Test nullable enum equality
-        var nullableEnumEqualRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.CurrentPriority == Priority.High);
-        var nullableEnumEqualResult = await Index.SearchAsync(nullableEnumEqualRequest);
-        nullableEnumEqualResult.Results.Should().HaveCount(1);
-        nullableEnumEqualResult.Results[0].Document!.Id.Should().Be("2");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.CurrentPriority == Priority.High, 1);
 
         // Test nullable enum null comparison
-        var nullableEnumNullRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.CurrentPriority == null);
-        var nullableEnumNullResult = await Index.SearchAsync(nullableEnumNullRequest);
-        nullableEnumNullResult.Results.Should().HaveCount(2);
-        nullableEnumNullResult.Results.Should().OnlyContain(r => r.Document!.Id == "3" || r.Document!.Id == "4");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.CurrentPriority == null, 2);
 
         // Test nullable enum not null comparison
-        var nullableEnumNotNullRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.CurrentPriority != null);
-        var nullableEnumNotNullResult = await Index.SearchAsync(nullableEnumNotNullRequest);
-        nullableEnumNotNullResult.Results.Should().HaveCount(2);
-        nullableEnumNotNullResult.Results.Should().OnlyContain(r => r.Document!.Id == "1" || r.Document!.Id == "2");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.CurrentPriority != null, 2);
     }
 
     [Fact]
@@ -1431,33 +1359,41 @@ public abstract partial class IndexTests
         // Arrange
         var guid1 = Guid.NewGuid();
         var guid2 = Guid.NewGuid();
-        
+
         var docs = new[]
         {
-            new TestDocument { Id = "1", Title = "Doc1", UniqueId = guid1, Status = DocumentStatus.Published, CurrentPriority = Priority.High },
-            new TestDocument { Id = "2", Title = "Doc2", UniqueId = guid2, Status = DocumentStatus.Published, CurrentPriority = Priority.Low },
-            new TestDocument { Id = "3", Title = "Doc3", UniqueId = Guid.NewGuid(), Status = DocumentStatus.Draft, CurrentPriority = Priority.High },
-            new TestDocument { Id = "4", Title = "Doc4", UniqueId = Guid.NewGuid(), Status = DocumentStatus.Archived, CurrentPriority = null }
+            new TestDocument
+            {
+                Id = "1", Title = "Doc1", UniqueId = guid1, Status = DocumentStatus.Published,
+                CurrentPriority = Priority.High
+            },
+            new TestDocument
+            {
+                Id = "2", Title = "Doc2", UniqueId = guid2, Status = DocumentStatus.Published,
+                CurrentPriority = Priority.Low
+            },
+            new TestDocument
+            {
+                Id = "3", Title = "Doc3", UniqueId = Guid.NewGuid(), Status = DocumentStatus.Draft,
+                CurrentPriority = Priority.High
+            },
+            new TestDocument
+            {
+                Id = "4", Title = "Doc4", UniqueId = Guid.NewGuid(), Status = DocumentStatus.Archived,
+                CurrentPriority = null
+            }
         };
         await Index.IndexManyAsync(docs);
 
         // Test complex filter: Published status AND (specific GUID OR high priority)
-        var complexRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.Status == DocumentStatus.Published && 
-                       (d.UniqueId == guid1 || d.CurrentPriority == Priority.High));
-        var complexResult = await Index.SearchAsync(complexRequest);
-        complexResult.Results.Should().HaveCount(1);
-        complexResult.Results[0].Document!.Id.Should().Be("1");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Status == DocumentStatus.Published &&
+                                                       (d.UniqueId == guid1 || d.CurrentPriority == Priority.High), 1);
 
         // Test complex filter with collections
         var guidCollection = new[] { guid1, guid2 };
         var statusCollection = new[] { DocumentStatus.Published, DocumentStatus.Draft };
-        var collectionRequest = new SearchRequest<TestDocument>()
-            .Where(d => guidCollection.Contains(d.UniqueId) && 
-                       statusCollection.Contains(d.Status));
-        var collectionResult = await Index.SearchAsync(collectionRequest);
-        collectionResult.Results.Should().HaveCount(2);
-        collectionResult.Results.Should().OnlyContain(r => r.Document!.Id == "1" || r.Document!.Id == "2");
+        await ShouldReturnSameResultsAsLinq(docs, d => guidCollection.Contains(d.UniqueId) &&
+                                                       statusCollection.Contains(d.Status), 2);
     }
 
     [Fact]
@@ -1474,17 +1410,44 @@ public abstract partial class IndexTests
         await Index.IndexManyAsync(docs);
 
         // Test enum equality
-        var enumEqualRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.DangerLevel == DangerZone.High);
-        var enumEqualResult = await Index.SearchAsync(enumEqualRequest);
-        enumEqualResult.Results.Should().HaveCount(1);
-        enumEqualResult.Results[0].Document!.Id.Should().Be("3");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel == DangerZone.High, 1);
 
         // Test enum greater than
-        var enumGreaterRequest = new SearchRequest<TestDocument>()
-            .Where(d => d.DangerLevel > DangerZone.Medium);
-        var enumGreaterResult = await Index.SearchAsync(enumGreaterRequest);
-        enumGreaterResult.Results.Should().HaveCount(2);
-        enumGreaterResult.Results.Select(r => r.Id).Should().BeEquivalentTo("3", "4");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel > DangerZone.Medium, 2);
+        await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel >= DangerZone.Medium, 3);
+
+        // Test enum less than
+        await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel < DangerZone.Archer, 3);
+        await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel <= DangerZone.High, 3);
+    }
+
+    private async Task ShouldReturnSameResultsAsLinq(TestDocument[] documents,
+        Expression<Func<TestDocument, bool>> expression,
+        int? expectedCount = null)
+    {
+        if (documents.Length == 0)
+        {
+            throw new ArgumentException("Documents cannot be empty");
+        }
+
+        var compiledExpression = expression.Compile();
+        var linqFilteredDocs = documents.Where(compiledExpression).ToList();
+        if (expectedCount is not null)
+        {
+            if (linqFilteredDocs.Count != expectedCount)
+            {
+                throw new InvalidOperationException(
+                    $"Expected {expectedCount} documents, but found {linqFilteredDocs.Count}");
+            }
+        }
+        else if (linqFilteredDocs.Count == 0)
+        {
+            throw new InvalidOperationException("No documents matched the filter");
+        }
+
+
+        var searchedDocs = await Index.SearchAsync(new SearchRequest<TestDocument>().Where(expression));
+        searchedDocs.Results.Should().HaveCount(linqFilteredDocs.Count);
+        searchedDocs.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(linqFilteredDocs.Select(d => d.Id));
     }
 }

@@ -38,6 +38,8 @@ public static class FilterMapper
                     VisitComparisonBinary(binary),
                 MemberExpression member when member.Type == typeof(bool) =>
                     VisitBooleanMember(member),
+                UnaryExpression { NodeType: ExpressionType.Not, Operand: MemberExpression member } when member.Type == typeof(bool) =>
+                    VisitNegatedBooleanMember(member),
                 MethodCallExpression method when IsStringNullOrEmptyMethod(method) =>
                     VisitStringNullOrEmptyMethod(method),
                 UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringNullOrEmptyMethod(method) =>
@@ -69,6 +71,18 @@ public static class FilterMapper
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = Operator.Equal,
                 Value = true
+            };
+        }
+
+        private FilterNode<T> VisitNegatedBooleanMember(MemberExpression member)
+        {
+            var propertyInfo = (PropertyInfo)member.Member;
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = propertyInfo.Name,
+                PropertyType = propertyInfo.PropertyType!,
+                Operator = Operator.Equal,
+                Value = false
             };
         }
 
