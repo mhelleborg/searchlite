@@ -242,9 +242,9 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
 
     public async Task<int> DeleteWhereAsync(SearchRequest<T> request, CancellationToken ct = default)
     {
-        if (request.Filters.Count == 0 && string.IsNullOrEmpty(request.Query))
+        if (request.Filters.Count == 0)
         {
-            throw new InvalidOperationException("DeleteWhereAsync requires at least one filter or query. Use ClearAsync() to delete all documents.");
+            throw new InvalidOperationException("DeleteWhereAsync requires at least one filter. Use ClearAsync() to delete all documents.");
         }
 
         await using var conn = await CreateConnectionAsync(ct);
