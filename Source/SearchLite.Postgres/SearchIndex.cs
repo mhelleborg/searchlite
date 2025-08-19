@@ -225,12 +225,47 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task ClearAsync(CancellationToken ct = default)
+    public async Task<int> DeleteManyAsync(IEnumerable<string> ids, CancellationToken ct = default)
+    {
+        var idsList = ids.ToList();
+        if (idsList.Count == 0) return 0;
+
+        await using var conn = await CreateConnectionAsync(ct);
+        var sql = $"""
+                   DELETE FROM {TableName}
+                   WHERE id = ANY(@ids);
+                   """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("ids", idsList.ToArray());
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<int> DeleteWhereAsync(SearchRequest<T> request, CancellationToken ct = default)
+    {
+        if (request.Filters.Count == 0 && string.IsNullOrEmpty(request.Query))
+        {
+            throw new InvalidOperationException("DeleteWhereAsync requires at least one filter or query. Use ClearAsync() to delete all documents.");
+        }
+
+        await using var conn = await CreateConnectionAsync(ct);
+        var clauses = BuildWhereClauses(request);
+        var sql = $"DELETE FROM {TableName} {clauses.ToWhereClause()}";
+        
+        await using var cmd = new NpgsqlCommand(sql, conn); 
+        if (!string.IsNullOrEmpty(request.Query))
+        {
+            cmd.Parameters.Add(new NpgsqlParameter("@Query", request.Query));
+        }
+        cmd.AddParameters(clauses);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<int> ClearAsync(CancellationToken ct = default)
     {
         await using var conn = await CreateConnectionAsync(ct);
         var sql = $"DELETE FROM {TableName};";
         await using var cmd = new NpgsqlCommand(sql, conn);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private async Task<NpgsqlConnection> CreateConnectionAsync(CancellationToken ct)

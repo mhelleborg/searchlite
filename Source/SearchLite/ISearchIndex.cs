@@ -43,17 +43,33 @@ public interface ISearchIndex<T> where T : ISearchableDocument
     Task DeleteAsync(string id, CancellationToken ct = default);
 
     /// <summary>
+    /// Remove multiple documents from the index by their IDs
+    /// </summary>
+    /// <param name="ids"></param>
+    /// <param name="ct"></param>
+    /// <returns>The number of deleted documents</returns>
+    Task<int> DeleteManyAsync(IEnumerable<string> ids, CancellationToken ct = default);
+
+    /// <summary>
+    /// Remove documents from the index that match the specified filters
+    /// </summary>
+    /// <param name="request"></param>
+    /// <param name="ct"></param>
+    /// <returns>The number of deleted documents</returns>
+    Task<int> DeleteWhereAsync(SearchRequest<T> request, CancellationToken ct = default);
+
+    /// <summary>
     /// Remove all documents from the index
     /// </summary>
     /// <param name="ct"></param>
-    /// <returns></returns>
-    Task ClearAsync(CancellationToken ct = default);
+    /// <returns>The number of deleted documents</returns>
+    Task<int> ClearAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Count all documents in the index
     /// </summary>
     /// <param name="ct"></param>
-  /// <returns>The total number of documents in the index</returns>
+    /// <returns>The total number of documents in the index</returns>
     Task<long> CountAsync(CancellationToken ct = default);
 
     /// <summary>
