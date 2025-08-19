@@ -37,13 +37,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Description is NOT null or empty
-        var request = new SearchRequest<TestDocument>().Where(d => !string.IsNullOrEmpty(d.Description));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "3", "4" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => !string.IsNullOrEmpty(d.Description), 2);
     }
 
     [Fact]
@@ -85,13 +80,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Tags is null, empty or whitespace
-        var request = new SearchRequest<TestDocument>().Where(d => string.IsNullOrWhiteSpace(d.Tags));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Results.Should().HaveCount(4);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "1", "2", "3", "4" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => string.IsNullOrWhiteSpace(d.Tags), 4);
     }
 
     [Fact]
@@ -133,13 +123,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Tags is NOT null, empty or whitespace
-        var request = new SearchRequest<TestDocument>().Where(d => !string.IsNullOrWhiteSpace(d.Tags));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "4", "5" });
+        // Act & Assert
+        await ShouldReturnSameResultsAsLinq(docs, d => !string.IsNullOrWhiteSpace(d.Tags), 2);
     }
 
     [Fact]
@@ -179,14 +164,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents with high views OR documents where description is null/empty
-        var request = new SearchRequest<TestDocument>()
-            .Where(d => d.Views > 500 || string.IsNullOrEmpty(d.Description));
-        var result = await Index.SearchAsync(request);
-
-        // Assert - Should get docs 1, 2, and 4
-        result.Results.Should().HaveCount(3);
-        result.Results.Select(r => r.Id).Should().BeEquivalentTo(new[] { "1", "2", "4" });
+        // Act & Assert - Find documents with high views OR documents where description is null/empty
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Views > 500 || string.IsNullOrEmpty(d.Description), 3);
     }
     
     [Fact]
@@ -233,14 +212,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where both Description AND Tags have content (not null/empty/whitespace)
-        var request = new SearchRequest<TestDocument>()
-            .Where(d => !string.IsNullOrWhiteSpace(d.Description) && !string.IsNullOrEmpty(d.Tags));
-        var result = await Index.SearchAsync(request);
-
-        // Assert - Should only get document 1
-        result.Results.Should().ContainSingle();
-        result.Results.Single().Id.Should().Be("1");
+        // Act & Assert - Find documents where both Description AND Tags have content (not null/empty/whitespace)
+        await ShouldReturnSameResultsAsLinq(docs, d => !string.IsNullOrWhiteSpace(d.Description) && !string.IsNullOrEmpty(d.Tags), 1);
     }
 
 }

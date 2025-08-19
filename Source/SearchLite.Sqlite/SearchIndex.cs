@@ -88,12 +88,13 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
             docCmd.Parameters.AddWithValue("@id", document.Id);
             docCmd.Parameters.AddWithValue("@doc", JsonSerializer.Serialize(document));
             docCmd.Parameters.AddWithValue("@text", document.GetSearchText());
-            await docCmd.ExecuteNonQueryAsync(ct);
+            return await docCmd.ExecuteNonQueryAsync(ct);
         }, ct);
 
     public Task IndexManyAsync(IEnumerable<T> documents, CancellationToken ct = default) =>
         SerializedWrite(async transaction =>
         {
+            var count = 0;
             foreach (var document in documents)
             {
                 var docSql = $"""
@@ -108,8 +109,10 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                 docCmd.Parameters.AddWithValue("@id", document.Id);
                 docCmd.Parameters.AddWithValue("@doc", JsonSerializer.Serialize(document));
                 docCmd.Parameters.AddWithValue("@text", document.GetSearchText());
-                await docCmd.ExecuteNonQueryAsync(ct);
+                count += await docCmd.ExecuteNonQueryAsync(ct);
             }
+
+            return count;
         }, ct);
 
     public async Task<SearchResponse<T>> SearchAsync(SearchRequest<T> request, CancellationToken ct = default)
@@ -304,10 +307,45 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
 
             await using var cmd = new SqliteCommand(sql, transaction.Connection, transaction);
             cmd.Parameters.AddWithValue("@id", id);
-            await cmd.ExecuteNonQueryAsync(ct);
+            return await cmd.ExecuteNonQueryAsync(ct);
         }, ct);
 
-    public Task ClearAsync(CancellationToken ct = default) =>
+    public Task<int> DeleteManyAsync(IEnumerable<string> ids, CancellationToken ct = default) =>
+        SerializedWrite(async transaction =>
+        {
+            var idsList = ids.ToList();
+            if (idsList.Count == 0) return 0;
+
+            // Create parameterized query for multiple IDs
+            var parameters = idsList.Select((id, index) => $"@id{index}").ToArray();
+            var sql = $"DELETE FROM {TableName} WHERE id IN ({string.Join(",", parameters)})";
+
+            await using var cmd = new SqliteCommand(sql, transaction.Connection, transaction);
+            for (int i = 0; i < idsList.Count; i++)
+            {
+                cmd.Parameters.AddWithValue($"@id{i}", idsList[i]);
+            }
+            return await cmd.ExecuteNonQueryAsync(ct);
+        }, ct);
+
+    public Task<int> DeleteWhereAsync(SearchRequest<T> request, CancellationToken ct = default) =>
+        SerializedWrite(async transaction =>
+        {
+            if (request.Filters.Count == 0)
+            {
+                throw new InvalidOperationException("DeleteWhereAsync requires at least one filter. Use ClearAsync() to delete all documents.");
+            }
+
+            var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
+            var whereClause = clauses.ToWhereClause();
+            var sql = $"DELETE FROM {TableName} {whereClause}";
+
+            await using var cmd = new SqliteCommand(sql, transaction.Connection, transaction);
+            cmd.AddParameters(clauses);
+            return await cmd.ExecuteNonQueryAsync(ct);
+        }, ct);
+
+    public Task<int> ClearAsync(CancellationToken ct = default) =>
         SerializedWrite(async transaction =>
         {
             var sql = $"""
@@ -316,7 +354,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                        """;
 
             await using var cmd = new SqliteCommand(sql, transaction.Connection, transaction);
-            await cmd.ExecuteNonQueryAsync(ct);
+            return await cmd.ExecuteNonQueryAsync(ct);
         }, ct);
 
     public async Task<long> CountAsync(CancellationToken ct = default)
@@ -351,7 +389,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                        """;
 
             await using var cmd = new SqliteCommand(sql, transaction.Connection, transaction);
-            await cmd.ExecuteNonQueryAsync(ct);
+            return await cmd.ExecuteNonQueryAsync(ct);
         }, ct);
 
         _manager.Remove(this);
@@ -362,7 +400,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
     /// </summary>
     /// <param name="callback">The write operation</param>
     /// <param name="cancellationToken"></param>
-    private async Task SerializedWrite(Func<SqliteTransaction, Task> callback,
+    private async Task<int> SerializedWrite(Func<SqliteTransaction, Task<int>> callback,
         CancellationToken cancellationToken)
     {
         await UpdateSemaphore.WaitAsync(cancellationToken);
@@ -374,8 +412,9 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
 
             try
             {
-                await callback(transaction);
+                var updated = await callback(transaction);
                 await transaction.CommitAsync(cancellationToken);
+                return updated;
             }
             catch
             {
@@ -433,7 +472,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                                """;
 
             await using var triggersCmd = new SqliteCommand(triggersSql, transaction.Connection, transaction);
-            await triggersCmd.ExecuteNonQueryAsync(cancellationToken);
+            return await triggersCmd.ExecuteNonQueryAsync(cancellationToken);
         }, cancellationToken);
     }
 

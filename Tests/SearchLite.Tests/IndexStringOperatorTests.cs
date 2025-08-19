@@ -17,14 +17,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title contains "Hello"
-        var request = new SearchRequest<TestDocument>().Where(d => d.Title.Contains("Hello"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "3" });
+        // Act & Assert - Find documents where Title contains "Hello"
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.Contains("Hello"), 2);
     }
 
     [Fact]
@@ -40,14 +34,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title does NOT contain "Hello"
-        var request = new SearchRequest<TestDocument>().Where(d => !d.Title.Contains("Hello"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "2", "4" });
+        // Act & Assert - Find documents where Title does NOT contain "Hello"
+        await ShouldReturnSameResultsAsLinq(docs, d => !d.Title.Contains("Hello"), 2);
     }
 
     [Fact]
@@ -63,14 +51,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title contains "hello" (case insensitive)
-        var request = new SearchRequest<TestDocument>().Where(d => d.Title.Contains("hello", StringComparison.OrdinalIgnoreCase));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(3);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "2", "3" });
+        // Act & Assert - Find documents where Title contains "hello" (case insensitive)
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.Contains("hello", StringComparison.OrdinalIgnoreCase), 3);
     }
 
     [Fact]
@@ -86,14 +68,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title starts with "Alpha"
-        var request = new SearchRequest<TestDocument>().Where(d => d.Title.StartsWith("Alpha"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "3" });
+        // Act & Assert - Find documents where Title starts with "Alpha"
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.StartsWith("Alpha"), 2);
     }
 
     [Fact]
@@ -109,14 +85,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title does NOT start with "Alpha"
-        var request = new SearchRequest<TestDocument>().Where(d => !d.Title.StartsWith("Alpha"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "2", "4" });
+        // Act & Assert - Find documents where Title does NOT start with "Alpha"
+        await ShouldReturnSameResultsAsLinq(docs, d => !d.Title.StartsWith("Alpha"), 2);
     }
 
     [Fact]
@@ -132,14 +102,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title starts with "alpha" (case insensitive)
-        var request = new SearchRequest<TestDocument>().Where(d => d.Title.StartsWith("alpha", StringComparison.OrdinalIgnoreCase));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(3);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "2", "3" });
+        // Act & Assert - Find documents where Title starts with "alpha" (case insensitive)
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.StartsWith("alpha", StringComparison.OrdinalIgnoreCase), 3);
     }
 
     [Fact]
@@ -155,14 +119,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title ends with ".txt"
-        var request = new SearchRequest<TestDocument>().Where(d => d.Title.EndsWith(".txt"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "3" });
+        // Act & Assert - Find documents where Title ends with ".txt"
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.EndsWith(".txt"), 2);
     }
 
     [Fact]
@@ -178,14 +136,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title does NOT end with ".txt"
-        var request = new SearchRequest<TestDocument>().Where(d => !d.Title.EndsWith(".txt"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "2", "4" });
+        // Act & Assert - Find documents where Title does NOT end with ".txt"
+        await ShouldReturnSameResultsAsLinq(docs, d => !d.Title.EndsWith(".txt"), 2);
     }
 
     [Fact]
@@ -201,14 +153,8 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where Title ends with ".txt" (case insensitive)
-        var request = new SearchRequest<TestDocument>().Where(d => d.Title.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(2);
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "3" });
+        // Act & Assert - Find documents where Title ends with ".txt" (case insensitive)
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.EndsWith(".txt", StringComparison.OrdinalIgnoreCase), 2);
     }
 
     [Fact]
@@ -224,15 +170,9 @@ public abstract partial class IndexTests
         };
         await Index.IndexManyAsync(docs);
 
-        // Act - Find documents where (Title starts with "My" AND Description contains "Important") OR Title ends with ".txt"
-        var request = new SearchRequest<TestDocument>().Where(d => 
-            (d.Title.StartsWith("My") && d.Description!.Contains("Important")) || d.Title.EndsWith(".txt"));
-        var result = await Index.SearchAsync(request);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.Results.Should().HaveCount(4); // All documents match: 1,2,4 match first condition, 1,3 match second condition
-        result.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "2", "3", "4" });
+        // Act & Assert - Find documents where (Title starts with "My" AND Description contains "Important") OR Title ends with ".txt"
+        await ShouldReturnSameResultsAsLinq(docs, d => 
+            (d.Title.StartsWith("My") && d.Description!.Contains("Important")) || d.Title.EndsWith(".txt"), 4);
     }
 
     [Fact]
@@ -249,25 +189,16 @@ public abstract partial class IndexTests
         await Index.IndexManyAsync(docs);
 
         // Test Contains with empty string (should match all)
-        var emptyContainsRequest = new SearchRequest<TestDocument>().Where(d => d.Title.Contains(""));
-        var emptyContainsResult = await Index.SearchAsync(emptyContainsRequest);
-        emptyContainsResult.Results.Should().HaveCount(4);
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.Contains(""), 4);
 
         // Test StartsWith with empty string (should match all)
-        var emptyStartsWithRequest = new SearchRequest<TestDocument>().Where(d => d.Title.StartsWith(""));
-        var emptyStartsWithResult = await Index.SearchAsync(emptyStartsWithRequest);
-        emptyStartsWithResult.Results.Should().HaveCount(4);
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.StartsWith(""), 4);
 
         // Test EndsWith with empty string (should match all)  
-        var emptyEndsWithRequest = new SearchRequest<TestDocument>().Where(d => d.Title.EndsWith(""));
-        var emptyEndsWithResult = await Index.SearchAsync(emptyEndsWithRequest);
-        emptyEndsWithResult.Results.Should().HaveCount(4);
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.EndsWith(""), 4);
 
         // Test Contains with single character
-        var singleCharRequest = new SearchRequest<TestDocument>().Where(d => d.Title.Contains("A"));
-        var singleCharResult = await Index.SearchAsync(singleCharRequest);
-        singleCharResult.Results.Should().HaveCount(1);
-        singleCharResult.Results[0].Document!.Id.Should().Be("2");
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.Contains("A"), 1);
     }
 
     [Fact]
@@ -284,15 +215,9 @@ public abstract partial class IndexTests
         await Index.IndexManyAsync(docs);
 
         // Test case-sensitive Contains
-        var caseSensitiveRequest = new SearchRequest<TestDocument>().Where(d => d.Title.Contains("Test"));
-        var caseSensitiveResult = await Index.SearchAsync(caseSensitiveRequest);
-        caseSensitiveResult.Results.Should().HaveCount(2);
-        caseSensitiveResult.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "4" });
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.Contains("Test"), 2);
 
         // Test case-insensitive Contains
-        var caseInsensitiveRequest = new SearchRequest<TestDocument>().Where(d => d.Title.Contains("test", StringComparison.OrdinalIgnoreCase));
-        var caseInsensitiveResult = await Index.SearchAsync(caseInsensitiveRequest);
-        caseInsensitiveResult.Results.Should().HaveCount(4);
-        caseInsensitiveResult.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(new[] { "1", "2", "3", "4" });
+        await ShouldReturnSameResultsAsLinq(docs, d => d.Title.Contains("test", StringComparison.OrdinalIgnoreCase), 4);
     }
 }

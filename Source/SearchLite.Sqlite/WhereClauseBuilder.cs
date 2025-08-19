@@ -12,14 +12,14 @@ public static class WhereClauseBuilder<T>
 {
     public static IReadOnlyList<Clause> BuildClauses(List<FilterNode<T>> filters)
     {
-        return filters.Select(BuildClause).ToList();
+        var globalParamCounter = 0;
+        return filters.Select(filter => BuildClause(filter, ref globalParamCounter)).ToList();
     }
 
-    private static Clause BuildClause(FilterNode<T> filter)
+    private static Clause BuildClause(FilterNode<T> filter, ref int globalParamCounter)
     {
-        var paramCounter = 0;
         var parameters = new List<SqliteParameter>();
-        var sql = BuildSql(filter, ref paramCounter, parameters);
+        var sql = BuildSql(filter, ref globalParamCounter, parameters);
         return new Clause
         {
             Sql = sql,

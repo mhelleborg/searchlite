@@ -197,6 +197,30 @@ public class WhereClauseTests
 
     private static Clause BuildClause(Expression<Func<TestModel, bool>> predicate) => BuildClauses(predicate).Single();
 
+    [Fact]
+    public void Should_Handle_Multiple_Where_Calls()
+    {
+        // This simulates the scenario: request.Where(d => d.Title.Contains("Important")).Where(d => d.Views >= 100)
+        var request = new SearchRequest<TestModel>()
+            .Where(x => x.Name.Contains("Test"))
+            .Where(x => x.Age >= 18);
+
+        var clauses = WhereClauseBuilder<TestModel>.BuildClauses(request.Filters);
+        
+        clauses.Should().HaveCount(2);
+        
+        // Check that parameter names don't conflict
+        var allParams = clauses.SelectMany(c => c.Parameters).ToList();
+        var paramNames = allParams.Select(p => p.ParameterName).ToList();
+        
+        paramNames.Should().HaveCount(2);
+        paramNames.Should().OnlyHaveUniqueItems("Parameter names should be unique to avoid conflicts");
+        
+        // The parameters should be @p0 and @p1, not both @p0
+        paramNames.Should().Contain("@p0");
+        paramNames.Should().Contain("@p1");
+    }
+
     private static IReadOnlyList<Clause> BuildClauses(params IEnumerable<Expression<Func<TestModel, bool>>> predicates)
     {
         return predicates.SelectMany(predicate =>
