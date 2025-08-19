@@ -1419,8 +1419,38 @@ public abstract partial class IndexTests
         // Test enum less than
         await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel < DangerZone.Archer, 3);
         await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel <= DangerZone.High, 3);
+        await ShouldReturnSameResultsAsLinq(docs, d => d.DangerLevel <= DangerZone.High, d => d.DangerLevel < DangerZone.Archer);
     }
 
+    private async Task ShouldReturnSameResultsAsLinq(TestDocument[] documents,
+        params Expression<Func<TestDocument, bool>>[] expressions)
+    {
+        if (documents.Length == 0)
+        {
+            throw new ArgumentException("Documents cannot be empty");
+        }
+
+        IEnumerable<TestDocument> expected = documents; 
+        var searchRequest = new SearchRequest<TestDocument>();
+        foreach (var expression in expressions)
+        {
+            var compiledExpression = expression.Compile();
+            expected = expected.Where(compiledExpression);
+            searchRequest = searchRequest.Where(expression);
+        }
+
+        var linqFilteredDocs = expected.ToList();
+        if (linqFilteredDocs.Count == 0)
+        {
+            throw new InvalidOperationException("No documents matched the filter");
+        }
+
+
+        var searchedDocs = await Index.SearchAsync(searchRequest);
+        searchedDocs.Results.Should().HaveCount(linqFilteredDocs.Count);
+        searchedDocs.Results.Select(r => r.Document!.Id).Should().BeEquivalentTo(linqFilteredDocs.Select(d => d.Id));
+    }
+    
     private async Task ShouldReturnSameResultsAsLinq(TestDocument[] documents,
         Expression<Func<TestDocument, bool>> expression,
         int? expectedCount = null)
