@@ -10,7 +10,7 @@ internal static class Extensions
         {
             return string.Empty;
         }
-
+ 
         return "WHERE " + string.Join(" AND ", clauses.Select(c => c.Sql));
     }
 

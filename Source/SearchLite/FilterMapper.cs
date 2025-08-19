@@ -10,9 +10,8 @@ public static class FilterMapper
     /// </summary>
     /// <param name="predicate"></param>
     /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
     public static FilterNode<T> Map<T>(Expression<Func<T, bool>> predicate)
-    {
+    { 
         var visitor = new FilterExpressionVisitor<T>();
         visitor.Visit(predicate);
         return visitor.Result ?? throw new InvalidOperationException("Failed to map expression");
@@ -37,7 +36,7 @@ public static class FilterMapper
                 BinaryExpression binary when IsComparisonOperator(binary.NodeType) => 
                     VisitComparisonBinary(binary),
                 MemberExpression member when member.Type == typeof(bool) =>
-                    VisitBooleanMember(member),
+                    VisitBooleanMember(member), 
                 UnaryExpression { NodeType: ExpressionType.Not, Operand: MemberExpression member } when member.Type == typeof(bool) =>
                     VisitNegatedBooleanMember(member),
                 MethodCallExpression method when IsStringNullOrEmptyMethod(method) =>
