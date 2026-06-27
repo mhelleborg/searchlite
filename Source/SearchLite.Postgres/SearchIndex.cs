@@ -208,7 +208,11 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
         {
             // Convert property name to jsonb path and direction
             var direction = order.Direction == SortDirection.Ascending ? "ASC" : "DESC";
-            return $"document->'{order.PropertyName}' {direction}";
+            var segments = FieldPath.Split(order.PropertyName);
+            var accessor = segments.Length == 1
+                ? $"document->'{segments[0]}'"
+                : $"document #> '{{{string.Join(",", segments)}}}'";
+            return $"{accessor} {direction}";
         });
         return $"ORDER BY {string.Join(", ", orderClauses)}";
     }

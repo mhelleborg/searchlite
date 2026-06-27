@@ -60,6 +60,18 @@ foreach (var match in results.Matches)
 }
 ```
 
+## Filtering
+
+LINQ-style `Where` filters support nested document fields and collection membership, across
+both backends:
+
+```csharp
+.Where(p => p.Maker.HeadOffice.City == "Oslo")   // nested fields, any depth
+.Where(p => p.Tags.Contains("sale"))             // array/list membership
+```
+
+On PostgreSQL these compile to JSONB containment (`@>`) and use the GIN index for fast lookups.
+
 ## Learn More
 
 For detailed documentation, advanced usage, and contributing guidelines, visit the [SearchLite GitHub Repository](https://github.com/mhelleborg/searchlite).

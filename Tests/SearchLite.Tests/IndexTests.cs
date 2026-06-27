@@ -45,7 +45,25 @@ public abstract partial class IndexTests
 
         public DangerZone DangerLevel { get; init; } = DangerZone.Low;
 
+        // Nested object + collection fields for complex-query coverage.
+        public AuthorInfo? Author { get; init; }
+        public List<string> Labels { get; init; } = [];
+        public List<int> Scores { get; init; } = [];
+
         public string GetSearchText() => $"{Title} {Content} {Description} {Tags}";
+    }
+
+    public class AuthorInfo
+    {
+        public string Name { get; init; } = "";
+        public int Age { get; init; }
+        public AddressInfo? Address { get; init; }
+    }
+
+    public class AddressInfo
+    {
+        public string City { get; init; } = "";
+        public string Country { get; init; } = "";
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

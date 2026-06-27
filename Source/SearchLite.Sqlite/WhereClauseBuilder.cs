@@ -72,6 +72,11 @@ public static class WhereClauseBuilder<T>
             return BuildStringNullOrEmptyCondition(condition.PropertyName, condition.Operator);
         }
 
+        if (IsCollectionContainsOperator(condition.Operator))
+        {
+            return BuildCollectionContainsCondition(condition, ref paramCounter, parameters);
+        }
+
         if (IsSetOperator(condition.Operator))
         {
             return BuildSetCondition(condition, ref paramCounter, parameters);
@@ -215,6 +220,79 @@ public static class WhereClauseBuilder<T>
     private static bool IsSetOperator(Operator op)
     {
         return op is Operator.In or Operator.NotIn;
+    }
+
+    private static bool IsCollectionContainsOperator(Operator op)
+    {
+        return op is Operator.CollectionContains or Operator.CollectionNotContains;
+    }
+
+    private static string BuildCollectionContainsCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
+    {
+        var paramName = $"@p{paramCounter++}";
+
+        // PropertyType is the collection type (e.g. List<string>, int[]). Derive the element type
+        // so the searched value is typed the same way scalar params are typed elsewhere.
+        var elementType = GetCollectionElementType(condition.PropertyType);
+        var underlyingType = Nullable.GetUnderlyingType(elementType) ?? elementType;
+
+        object? paramValue = condition.Value;
+
+        if (underlyingType.IsEnum)
+        {
+            // For enum elements the property lookup uses the leaf segment of the dotted path; the
+            // enum format only depends on the enum type / member converters, so a type-level
+            // fallback gives a correct result for nested array fields as well.
+            var format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+
+            if (format == EnumSerializationFormat.String)
+            {
+                paramValue = condition.Value?.ToString();
+            }
+            else
+            {
+                if (condition.Value != null)
+                    paramValue = Convert.ChangeType(condition.Value, underlyingType.GetEnumUnderlyingType());
+            }
+        }
+        else if (underlyingType == typeof(Guid))
+        {
+            paramValue = condition.Value?.ToString();
+        }
+
+        parameters.Add(new SqliteParameter(paramName, paramValue ?? DBNull.Value));
+
+        var existsClause = $"EXISTS (SELECT 1 FROM json_each(document, '$.{condition.PropertyName}') WHERE value = {paramName})";
+
+        return condition.Operator switch
+        {
+            Operator.CollectionContains => existsClause,
+            Operator.CollectionNotContains => $"NOT {existsClause}",
+            _ => throw new NotSupportedException($"Collection operator {condition.Operator} is not supported")
+        };
+    }
+
+    private static Type GetCollectionElementType(Type collectionType)
+    {
+        if (collectionType.IsArray)
+        {
+            return collectionType.GetElementType()!;
+        }
+
+        if (collectionType.IsGenericType)
+        {
+            return collectionType.GetGenericArguments()[0];
+        }
+
+        var enumerableInterface = collectionType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
+
+        if (enumerableInterface != null)
+        {
+            return enumerableInterface.GetGenericArguments()[0];
+        }
+
+        throw new NotSupportedException($"Cannot determine element type for collection type {collectionType}");
     }
 
     private static bool IsStringOperator(Operator op)
