@@ -10,6 +10,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageVersion>
     <PackageVersion Include="FluentAssertions" Version="[7.2, 8)" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.4" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <!-- Pin the native SQLite binary forward of the GHSA-2m69-gcr7-jv3q advisory
          (covers all 2.x); Microsoft.Data.Sqlite still resolves the managed core. -->
@@ -17,6 +19,7 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.203" />
     <PackageVersion Include="Npgsql" Version="9.0.3" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.3.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.3.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.3">
