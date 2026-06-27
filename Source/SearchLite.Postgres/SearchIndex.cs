@@ -146,7 +146,7 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
                    {limitClause}
                    """;
         var results = new List<SearchResult<T>>();
-        var totalCount = 0;
+        long totalCount = 0;
         float maxScore = 0;
         await using var cmd = new NpgsqlCommand(sql, conn);
 
@@ -159,7 +159,7 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
             {
                 var score = reader.GetFloat(2);
                 maxScore = Math.Max(maxScore, score);
-                totalCount = reader.GetInt32(3);
+                totalCount = reader.GetInt64(3);
                 var json = reader.GetString(1);
                 results.Add(new SearchResult<T> { Id = reader.GetString(0), LastUpdated = reader.GetDateTime(4), Score = score, Document = request.Options.IncludeRawDocument && !string.IsNullOrEmpty(json) ? JsonSerializer.Deserialize<T>(json) : default });
             }
@@ -185,7 +185,7 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
             countCmd.AddParameters(clauses);
 
             var countResult = await countCmd.ExecuteScalarAsync(ct);
-            totalCount = Convert.ToInt32(countResult);
+            totalCount = Convert.ToInt64(countResult);
         }
 
         return new SearchResponse<T>

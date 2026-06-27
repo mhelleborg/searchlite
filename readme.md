@@ -72,7 +72,7 @@ var request = new SearchRequest<Product>
     Query = "gaming laptop",
     Options = new SearchOptions
     {
-        MaxResults = 10,
+        Take = 10,
         MinScore = 0.5f
     }
 }.Where(p => p.Price < 2000);
@@ -89,9 +89,11 @@ foreach (var match in results.Matches)
 
 The `SearchOptions` class allows you to customize your search behavior:
 
-- `MaxResults`: Maximum number of results to return (default: 100)
-- `MinScore`: Minimum relevance score for matches (default: 0.0)
+- `Take`: Maximum number of results to return (default: 100)
+- `Skip`: Number of results to skip, for paging (default: 0)
+- `MinScore`: Minimum relevance score for matches (default: 0.0). Not comparable across providers.
 - `IncludeRawDocument`: Whether to include the full document in results (default: true)
+- `IncludePartialMatches`: Whether the query matches on individual terms rather than the full query (default: true)
 
 ## Filtering
 

@@ -15,15 +15,17 @@ public class SearchOptions
     public int Take { get; init; } = 100;
 
     /// <summary>
-    /// Score threshold to include in the results
-    /// The score for a document will not be the same across providers, as 
+    /// Score threshold to include in the results.
+    /// Note: the score for a document is not comparable across providers, as each backend
+    /// uses its own relevance metric (e.g. PostgreSQL <c>ts_rank</c>, SQLite FTS5 rank). Treat
+    /// <see cref="MinScore"/> as a provider-specific tuning knob, not a portable value.
     /// </summary>
     public float MinScore { get; init; } = 0.0f;
 
     /// <summary>
     /// If set to false, will only return the document id and score
     /// </summary>
-    public bool IncludeRawDocument { get; set; } = true;
+    public bool IncludeRawDocument { get; init; } = true;
 
     /// <summary>
     /// Flag if the search should include partial matches. If not, the query will only match on the full query
