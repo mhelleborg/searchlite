@@ -150,7 +150,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                    """;
 
         var results = new List<SearchResult<T>>();
-        var totalCount = 0;
+        long totalCount = 0;
         float maxScore = 0;
 
         await using var cmd = new SqliteCommand(sql, Connection);
@@ -163,7 +163,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
         {
             var score = Convert.ToSingle(reader.GetDouble(3));
             maxScore = Math.Max(maxScore, score);
-            totalCount = reader.GetInt32(4);
+            totalCount = reader.GetInt64(4);
 
             results.Add(new SearchResult<T>
             {
@@ -201,7 +201,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
             countCmd.AddParameters(clauses);
 
             var countResult = await countCmd.ExecuteScalarAsync(ct);
-            totalCount = Convert.ToInt32(countResult);
+            totalCount = Convert.ToInt64(countResult);
         }
 
         return new SearchResponse<T>
@@ -250,7 +250,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
                    """;
 
         var results = new List<SearchResult<T>>();
-        var totalCount = 0;
+        long totalCount = 0;
         const float score = 1.0f;
 
 
@@ -261,7 +261,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            totalCount = reader.GetInt32(request.Options.IncludeRawDocument ? 3 : 2);
+            totalCount = reader.GetInt64(request.Options.IncludeRawDocument ? 3 : 2);
 
             results.Add(new SearchResult<T>
             {
@@ -287,7 +287,7 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
             countCmd.AddParameters(clauses);
 
             var countResult = await countCmd.ExecuteScalarAsync(ct);
-            totalCount = Convert.ToInt32(countResult);
+            totalCount = Convert.ToInt64(countResult);
         }
 
         return new SearchResponse<T>
@@ -368,12 +368,32 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
     public async Task<long> CountAsync(SearchRequest<T> request, CancellationToken ct = default)
     {
         var clauses = WhereClauseBuilder<T>.BuildClauses(request.Filters);
-        var sql = $"""
-                   SELECT COUNT(*)
-                   FROM {TableName} m
-                   {clauses.ToWhereClause()}
-                   """;
+
+        // Mirror SearchAsync: when a text query is present, restrict the count to documents
+        // that match the FTS query as well as the structured filters.
+        var sql = string.IsNullOrEmpty(request.Query)
+            ? $"""
+               SELECT COUNT(*)
+               FROM {TableName} m
+               {clauses.ToWhereClause()}
+               """
+            : $"""
+               SELECT COUNT(*)
+               FROM {TableName} m
+               RIGHT JOIN (
+                   SELECT id
+                   FROM {FtsTableName}
+                   WHERE {FtsTableName} MATCH @Query
+               ) fts ON m.id = fts.id
+               {clauses.ToWhereClause()}
+               """;
+
         await using var cmd = new SqliteCommand(sql, Connection);
+        if (!string.IsNullOrEmpty(request.Query))
+        {
+            cmd.Parameters.Add(CreateMatchParameter(request.Query, request.Options.IncludePartialMatches));
+        }
+
         cmd.AddParameters(clauses);
         var result = await cmd.ExecuteScalarAsync(ct);
         return Convert.ToInt64(result);

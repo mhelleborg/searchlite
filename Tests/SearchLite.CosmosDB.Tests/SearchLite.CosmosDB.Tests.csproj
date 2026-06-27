@@ -30,6 +30,6 @@
     <ProjectReference Include="..\..\Source\SearchLite.CosmosDB\SearchLite.CosmosDB.csproj" />
     <ProjectReference Include="..\..\Source\SearchLite\SearchLite.csproj" />
     <!-- Reuse the shared abstract conformance suite (SearchLite.Tests.IndexTests). -->
-    <ProjectReference Include="..\SearchLite.Tests\SearchLite.Tests.csproj" />
+    <ProjectReference Include="..\SearchLite.Conformance\SearchLite.Conformance.csproj" />
   </ItemGroup>
 </Project>

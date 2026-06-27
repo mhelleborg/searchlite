@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <LangVersion>preview</LangVersion>
-    <RootNamespace>SearchLite.Tests</RootNamespace>
+    <RootNamespace>SearchLite.Tests.Sqlite</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector">
@@ -24,6 +24,7 @@
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\Source\SearchLite\SearchLite.csproj" />
+    <ProjectReference Include="..\SearchLite.Conformance\SearchLite.Conformance.csproj" />
+    <ProjectReference Include="..\..\Source\SearchLite.Sqlite\SearchLite.Sqlite.csproj" />
   </ItemGroup>
 </Project>

@@ -13,7 +13,7 @@ public class SearchManager : ISearchEngineManager
         _connectionString = connectionString;
     }
 
-    public async Task<ISearchIndex<T>> Get<T>(string collectionName, CancellationToken cancellationToken)
+    public async Task<ISearchIndex<T>> Get<T>(string collectionName, CancellationToken cancellationToken = default)
         where T : ISearchableDocument
     {
         var tableName = SearchIndex<T>.GetTableName(collectionName);
