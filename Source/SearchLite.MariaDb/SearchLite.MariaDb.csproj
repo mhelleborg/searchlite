@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>SearchLite.MariaDb</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MySqlConnector" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SearchLite\SearchLite.csproj" />
+    </ItemGroup>
+
+</Project>
