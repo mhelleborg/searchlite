@@ -49,7 +49,7 @@ await productIndex.IndexAsync(new Product
 var request = new SearchRequest<Product>
 {
     Query = "gaming laptop",
-    Options = new SearchOptions { MaxResults = 10, MinScore = 0.5f }
+    Options = new SearchOptions { Take = 10, MinScore = 0.5f }
 }.Where(p => p.Price < 2000);
 
 var results = await productIndex.SearchAsync(request);

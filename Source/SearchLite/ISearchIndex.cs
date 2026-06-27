@@ -86,12 +86,4 @@ public interface ISearchIndex<T> where T : ISearchableDocument
     /// <param name="ct"></param>
     /// <returns></returns>
     Task DropIndexAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Initialize the search index. Called by the manager when the index is created.
-    /// Not required to be called by the user.
-    /// </summary>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    Task Init(CancellationToken cancellationToken);
 }
