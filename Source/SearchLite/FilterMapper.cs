@@ -501,12 +501,16 @@ public static class FilterMapper
         /// </summary>
         private static (Expression collection, Expression item) ExtractContainsOperands(MethodCallExpression method)
         {
-            if (method.Object == null && method.Arguments.Count == 2)
+            // Static form: Enumerable.Contains(collection, item) or the MemoryExtensions span
+            // overloads Contains(span, value[, comparer]) — collection and item are the first two
+            // arguments; any trailing comparer argument is ignored.
+            if (method.Object == null && method.Arguments.Count >= 2)
             {
                 return (method.Arguments[0], method.Arguments[1]);
             }
 
-            if (method.Object != null && method.Arguments.Count == 1)
+            // Instance form: collection.Contains(item[, comparer]).
+            if (method.Object != null && method.Arguments.Count >= 1)
             {
                 return (method.Object, method.Arguments[0]);
             }
