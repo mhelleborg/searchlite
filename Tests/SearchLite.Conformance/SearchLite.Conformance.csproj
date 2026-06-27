@@ -8,7 +8,10 @@
     <RootNamespace>SearchLite.Tests</RootNamespace>
     <!-- Shared provider conformance suite. Consumed by the per-provider test
          projects, which subclass the abstract test classes to run the suite
-         against a concrete backend. Not a runnable test project itself. -->
+         against a concrete backend. Not a runnable test project itself, so
+         exclude it from `dotnet test` discovery (it has no test runner; running
+         it directly makes the testhost exit non-zero). -->
+    <IsTestProject>false</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" />
