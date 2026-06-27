@@ -8,18 +8,39 @@ on:
   release:
     types: [ published ]
 
-env:
-  DOTNET_VERSION: '10.0.x'
-  SOLUTION_FILE: ""
-
 permissions:
   contents: read
 
 jobs:
-  build_and_test:
-    name: Build, Test and Release
+  # Discover every test project so they can be tested on parallel runners via a
+  # matrix. New providers add a Tests/SearchLite.<Provider>.Tests project and are
+  # picked up automatically — no workflow change needed. The shared
+  # SearchLite.Conformance library is intentionally excluded (it is not a *.Tests
+  # project and has no test runner).
+  discover:
+    name: Discover test projects
     runs-on: ubuntu-latest
-    
+    outputs:
+      projects: ${{ steps.find.outputs.projects }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find test projects
+        id: find
+        shell: bash
+        run: |
+          projects=$(find Tests -name '*.Tests.csproj' | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "Found test projects: $projects"
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test ${{ matrix.project }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.discover.outputs.projects) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,37 +54,49 @@ jobs:
             9.0.x
             10.0.x
 
-      - name: Restore dependencies
-        run: dotnet restore ${{ env.SOLUTION_FILE }}
+      - name: Restore
+        run: dotnet restore "${{ matrix.project }}"
 
       - name: Build
-        run: dotnet build ${{ env.SOLUTION_FILE }} --configuration Release --no-restore
+        run: dotnet build "${{ matrix.project }}" --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test ${{ env.SOLUTION_FILE }} --configuration Release --no-build --verbosity normal
-      
-      #      - name: Upload build artifacts
-      #        uses: actions/upload-artifact@v4
-      #        with:
-      #          name: build-artifacts
-      #          path: |
-      #            **/bin/Release/**/*.dll
-      #            **/bin/Release/**/*.pdb
-      #          retention-days: 7
+        run: dotnet test "${{ matrix.project }}" --configuration Release --no-build --verbosity normal
+
+  release:
+    name: Pack and Publish
+    if: github.event_name == 'release'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore SearchLite.sln
+
+      - name: Build
+        run: dotnet build SearchLite.sln --configuration Release --no-restore
 
       - name: Get version
-        if: github.event_name == 'release'
         id: get_version
         run: |
           TAG=${{ github.event.release.tag_name }}
           echo "VERSION=${TAG#v}" >> $GITHUB_ENV
 
       - name: Pack
-        if: github.event_name == 'release'
-        run: dotnet pack ${{ env.SOLUTION_FILE }} /p:Version=${{ env.VERSION }} --configuration Release --no-build -o packages
+        run: dotnet pack SearchLite.sln /p:Version=${{ env.VERSION }} --configuration Release --no-build -o packages
 
       - name: Upload packages
-        if: github.event_name == 'release'
         uses: actions/upload-artifact@v4
         with:
           name: packages
@@ -72,5 +105,4 @@ jobs:
           retention-days: 7
 
       - name: Publish
-        if: github.event_name == 'release'
         run: dotnet nuget push packages/*.nupkg -k ${{ secrets.NUGET_API_KEY }} -s https://api.nuget.org/v3/index.json

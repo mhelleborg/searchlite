@@ -25,8 +25,7 @@
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\SearchLite.Conformance\SearchLite.Conformance.csproj" />
     <ProjectReference Include="..\..\Source\SearchLite.SqlServer\SearchLite.SqlServer.csproj" />
-    <ProjectReference Include="..\..\Source\SearchLite\SearchLite.csproj" />
-    <ProjectReference Include="..\SearchLite.Tests\SearchLite.Tests.csproj" />
   </ItemGroup>
 </Project>
