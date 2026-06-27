@@ -4,6 +4,10 @@ public abstract record FilterNode<T>
 {
     public sealed record Condition : FilterNode<T>
     {
+        /// <summary>
+        /// The document field to filter on, encoded as a dot-separated path for nested
+        /// fields (e.g. "Author.Name"). Top-level fields are a single segment ("Views").
+        /// </summary>
         public required string PropertyName { get; init; }
         public required object Value { get; init; }
         public Operator Operator { get; init; }
@@ -44,7 +48,9 @@ public enum Operator
     EndsWithIgnoreCase,
     NotEndsWithIgnoreCase,
     In,
-    NotIn
+    NotIn,
+    CollectionContains,
+    CollectionNotContains
 }
 
 public enum LogicalOperator

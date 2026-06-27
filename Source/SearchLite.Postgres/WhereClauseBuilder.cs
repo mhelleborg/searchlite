@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Npgsql;
 
 namespace SearchLite.Postgres;
@@ -59,9 +61,27 @@ public static class WhereClauseBuilder<T>
             : conditions.FirstOrDefault() ?? "TRUE";
     }
 
+    /// <summary>
+    /// Builds a path-aware JSONB text accessor for the given dotted property path.
+    /// 1 segment  -> (document->>'seg')
+    /// N segments -> (document #>> '{seg1,seg2,...}')
+    /// </summary>
+    private static string BuildTextAccessor(string propertyName)
+    {
+        var segments = FieldPath.Split(propertyName);
+        return segments.Length == 1
+            ? $"(document->>'{segments[0]}')"
+            : $"(document #>> '{{{string.Join(",", segments)}}}')";
+    }
+
     private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
         List<NpgsqlParameter> parameters)
     {
+        if (IsCollectionOperator(condition.Operator))
+        {
+            return BuildCollectionCondition(condition, ref paramCounter, parameters);
+        }
+
         if (IsNullOperator(condition.Operator))
         {
             return BuildNullCondition(condition.PropertyName, condition.Operator);
@@ -82,26 +102,26 @@ public static class WhereClauseBuilder<T>
             return BuildStringCondition(condition, ref paramCounter, parameters);
         }
 
+        var underlyingType = Nullable.GetUnderlyingType(condition.PropertyType) ?? condition.PropertyType;
+
+        // Equal/NotEqual on containment-eligible types use JSONB @> so the GIN index is used.
+        if ((condition.Operator is Operator.Equal or Operator.NotEqual)
+            && IsContainmentEligible(underlyingType))
+        {
+            return BuildContainmentEqualityCondition(condition, underlyingType, ref paramCounter, parameters);
+        }
+
+        var fieldExpression = BuildTextAccessor(condition.PropertyName);
         var postgresType = GetPostgresType(condition.PropertyType, condition.PropertyName);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"@p{paramCounter++}";
 
         object? paramValue = condition.Value;
-        var underlyingType = Nullable.GetUnderlyingType(condition.PropertyType) ?? condition.PropertyType;
 
         if (underlyingType.IsEnum)
         {
-            var prop = typeof(T).GetProperty(condition.PropertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-            EnumSerializationFormat format;
-            if (prop != null)
-            {
-                format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
-            }
-            else
-            {
-                format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
-            }
-            
+            var format = ResolveEnumFormat(condition.PropertyName, underlyingType);
+
             if (format == EnumSerializationFormat.String)
             {
                 paramValue = condition.Value?.ToString();
@@ -114,7 +134,146 @@ public static class WhereClauseBuilder<T>
 
         parameters.Add(new NpgsqlParameter(paramName, paramValue ?? DBNull.Value));
 
-        return $"(document->>'{condition.PropertyName}'){postgresType} {operatorString} {paramName}";
+        return $"{fieldExpression}{postgresType} {operatorString} {paramName}";
+    }
+
+    /// <summary>
+    /// Underlying types for which JSONB containment (@>) reliably matches the stored representation.
+    /// </summary>
+    private static bool IsContainmentEligible(Type underlyingType)
+    {
+        if (underlyingType.IsEnum) return true;
+
+        return underlyingType == typeof(string)
+               || underlyingType == typeof(bool)
+               || underlyingType == typeof(Guid)
+               || underlyingType == typeof(int)
+               || underlyingType == typeof(long)
+               || underlyingType == typeof(short)
+               || underlyingType == typeof(byte);
+    }
+
+    private static EnumSerializationFormat ResolveEnumFormat(string propertyName, Type underlyingType)
+    {
+        var prop = typeof(T).GetProperty(propertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
+        return prop != null
+            ? EnumSerializationAnalyzer.GetPropertyFormat(prop)
+            : EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+    }
+
+    /// <summary>
+    /// Produces the JSON node representation of a scalar leaf value, honoring enum format.
+    /// </summary>
+    private static JsonNode? BuildLeafJson(object? value, Type underlyingType, string propertyName)
+    {
+        if (value == null) return null;
+
+        if (underlyingType.IsEnum)
+        {
+            var format = ResolveEnumFormat(propertyName, underlyingType);
+            if (format == EnumSerializationFormat.String)
+            {
+                return JsonValue.Create(value.ToString());
+            }
+
+            var numeric = Convert.ChangeType(value, underlyingType.GetEnumUnderlyingType());
+            return JsonSerializer.SerializeToNode(numeric, numeric!.GetType());
+        }
+
+        if (underlyingType == typeof(Guid))
+        {
+            return JsonValue.Create(((Guid)value).ToString("D"));
+        }
+
+        if (underlyingType == typeof(string))
+        {
+            return JsonValue.Create((string)value);
+        }
+
+        if (underlyingType == typeof(bool))
+        {
+            return JsonValue.Create((bool)value);
+        }
+
+        // Integer types: serialize as JSON numbers.
+        return JsonSerializer.SerializeToNode(value, underlyingType);
+    }
+
+    /// <summary>
+    /// Wraps a leaf JSON node inside a nested object following the dotted path.
+    /// e.g. path "Author.Name", leaf "Alice" -> {"Author":{"Name":"Alice"}}
+    /// </summary>
+    private static string BuildPathJson(string propertyName, JsonNode? leaf)
+    {
+        var segments = FieldPath.Split(propertyName);
+        JsonNode? node = leaf;
+        for (var i = segments.Length - 1; i >= 0; i--)
+        {
+            var obj = new JsonObject { [segments[i]] = node };
+            node = obj;
+        }
+
+        return node!.ToJsonString();
+    }
+
+    private static string BuildContainmentEqualityCondition(FilterNode<T>.Condition condition, Type underlyingType,
+        ref int paramCounter, List<NpgsqlParameter> parameters)
+    {
+        var leaf = BuildLeafJson(condition.Value, underlyingType, condition.PropertyName);
+        var json = BuildPathJson(condition.PropertyName, leaf);
+
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new NpgsqlParameter(paramName, json));
+
+        return condition.Operator == Operator.Equal
+            ? $"document @> {paramName}::jsonb"
+            : $"NOT (document @> {paramName}::jsonb)";
+    }
+
+    private static bool IsCollectionOperator(Operator op)
+    {
+        return op is Operator.CollectionContains or Operator.CollectionNotContains;
+    }
+
+    private static string BuildCollectionCondition(FilterNode<T>.Condition condition, ref int paramCounter,
+        List<NpgsqlParameter> parameters)
+    {
+        var elementType = GetElementType(condition.PropertyType);
+        var underlyingElementType = Nullable.GetUnderlyingType(elementType) ?? elementType;
+
+        var leaf = BuildLeafJson(condition.Value, underlyingElementType, condition.PropertyName);
+        var array = new JsonArray { leaf };
+        var json = BuildPathJson(condition.PropertyName, array);
+
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new NpgsqlParameter(paramName, json));
+
+        return condition.Operator == Operator.CollectionContains
+            ? $"document @> {paramName}::jsonb"
+            : $"NOT (document @> {paramName}::jsonb)";
+    }
+
+    private static Type GetElementType(Type collectionType)
+    {
+        if (collectionType.IsArray)
+        {
+            return collectionType.GetElementType()!;
+        }
+
+        if (collectionType.IsGenericType)
+        {
+            return collectionType.GetGenericArguments()[0];
+        }
+
+        // IEnumerable<TElem> implemented somewhere in the hierarchy.
+        var enumerableInterface = collectionType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
+        if (enumerableInterface != null)
+        {
+            return enumerableInterface.GetGenericArguments()[0];
+        }
+
+        throw new NotSupportedException($"Cannot determine element type for collection type {collectionType}");
     }
 
     private static string GetPostgresType(Type type, string propertyName)
@@ -182,7 +341,7 @@ public static class WhereClauseBuilder<T>
 
     private static string BuildNullCondition(string propertyName, Operator op)
     {
-        var fieldExpression = $"(document->>'{propertyName}')";
+        var fieldExpression = BuildTextAccessor(propertyName);
 
         return op switch
         {
@@ -194,7 +353,7 @@ public static class WhereClauseBuilder<T>
 
     private static string BuildStringNullOrEmptyCondition(string propertyName, Operator op)
     {
-        var fieldExpression = $"(document->>'{propertyName}')";
+        var fieldExpression = BuildTextAccessor(propertyName);
 
         return op switch
         {
@@ -223,9 +382,10 @@ public static class WhereClauseBuilder<T>
 
     private static string BuildSetCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<NpgsqlParameter> parameters)
     {
+        var accessor = BuildTextAccessor(condition.PropertyName);
         var fieldExpression = condition.PropertyType == typeof(string)
-            ? $"(document->>'{condition.PropertyName}')::text"
-            : $"(document->>'{condition.PropertyName}'){GetPostgresType(condition.PropertyType, condition.PropertyName)}";
+            ? $"{accessor}::text"
+            : $"{accessor}{GetPostgresType(condition.PropertyType, condition.PropertyName)}";
 
         return condition.Operator switch
         {
@@ -237,7 +397,7 @@ public static class WhereClauseBuilder<T>
 
     private static string BuildStringCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<NpgsqlParameter> parameters)
     {
-        var fieldExpression = $"(document->>'{condition.PropertyName}')::text";
+        var fieldExpression = $"{BuildTextAccessor(condition.PropertyName)}::text";
 
         return condition.Operator switch
         {
@@ -299,7 +459,7 @@ public static class WhereClauseBuilder<T>
                     {
                         format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
                     }
-                    
+
                     if (format == EnumSerializationFormat.String)
                     {
                         paramValue = item?.ToString();

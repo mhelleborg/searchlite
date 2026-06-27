@@ -20,6 +20,19 @@ public class WhereClauseTests
         String2
     }
 
+    public class TestAddress
+    {
+        public required string City { get; set; }
+    }
+
+    public class TestAuthor
+    {
+        public required string Name { get; set; }
+        public int Age { get; set; }
+        public required TestAddress Address { get; set; }
+        public required List<string> Roles { get; set; }
+    }
+
     public class TestModel
     {
         public int Age { get; set; }
@@ -30,6 +43,8 @@ public class WhereClauseTests
         public DateTime CreatedAt { get; set; }
         public TestEnum EnumValue { get; set; }
         public TestStringEnum StringEnumValue { get; set; }
+        public required List<string> Labels { get; set; }
+        public required TestAuthor Author { get; set; }
     }
 
     [Fact]
@@ -193,6 +208,85 @@ public class WhereClauseTests
             clause.Parameters.Should().HaveCount(1);
             clause.Parameters[0].Value.Should().Be(18);
         }
+    }
+
+    [Fact]
+    public void Should_Handle_Nested_String_Equality()
+    {
+        var clause = BuildClause(x => x.Author.Name == "John");
+
+        clause.Sql.Should().Be("CAST(json_extract(document, '$.Author.Name') AS TEXT) = @p0");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("John");
+    }
+
+    [Fact]
+    public void Should_Handle_Nested_Integer_Comparison()
+    {
+        var clause = BuildClause(x => x.Author.Age > 18);
+
+        clause.Sql.Should().Be("CAST(json_extract(document, '$.Author.Age') AS INTEGER) > @p0");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be(18);
+    }
+
+    [Fact]
+    public void Should_Handle_Deeply_Nested_String_Equality()
+    {
+        var clause = BuildClause(x => x.Author.Address.City == "Oslo");
+
+        clause.Sql.Should().Be("CAST(json_extract(document, '$.Author.Address.City') AS TEXT) = @p0");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("Oslo");
+    }
+
+    [Fact]
+    public void Should_Handle_Nested_Null_Check()
+    {
+        var clause = BuildClause(x => x.Author.Name == null);
+
+        clause.Sql.Should().Be("json_extract(document, '$.Author.Name') IS NULL");
+        clause.Parameters.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Should_Handle_Nested_String_Operator()
+    {
+        var clause = BuildClause(x => x.Author.Name.Contains("oh"));
+
+        clause.Sql.Should().Be("CAST(json_extract(document, '$.Author.Name') AS TEXT) GLOB @p0");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("*oh*");
+    }
+
+    [Fact]
+    public void Should_Handle_CollectionContains()
+    {
+        var clause = BuildClause(x => x.Labels.Contains("urgent"));
+
+        clause.Sql.Should().Be("EXISTS (SELECT 1 FROM json_each(document, '$.Labels') WHERE value = @p0)");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("urgent");
+    }
+
+    [Fact]
+    public void Should_Handle_CollectionNotContains()
+    {
+        var clause = BuildClause(x => !x.Labels.Contains("urgent"));
+
+        clause.Sql.Should().Be("NOT EXISTS (SELECT 1 FROM json_each(document, '$.Labels') WHERE value = @p0)");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("urgent");
+    }
+
+    [Fact]
+    public void Should_Handle_Nested_CollectionContains()
+    {
+        var clause = BuildClause(x => x.Author.Roles.Contains("admin"));
+
+        clause.Sql.Should().Be("EXISTS (SELECT 1 FROM json_each(document, '$.Author.Roles') WHERE value = @p0)");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("admin");
     }
 
     private static Clause BuildClause(Expression<Func<TestModel, bool>> predicate) => BuildClauses(predicate).Single();

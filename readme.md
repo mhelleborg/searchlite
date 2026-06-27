@@ -105,6 +105,57 @@ var request = new SearchRequest<Product>
 .Where(p => p.Price >= 1000 && p.Price <= 2000);
 ```
 
+### Nested fields
+
+Filters and ordering can reach into nested objects within a document, at any depth:
+
+```csharp
+// Documents can hold nested objects and collections
+public class Product : ISearchableDocument
+{
+    public string Id { get; set; }
+    public string Name { get; set; }
+    public Manufacturer Maker { get; set; }   // nested object
+    public List<string> Tags { get; set; }    // collection field
+    public string GetSearchText() => $"{Id} {Name}";
+}
+
+public class Manufacturer
+{
+    public string Name { get; set; }
+    public Address HeadOffice { get; set; }
+}
+
+// Filter and order by nested fields
+var request = new SearchRequest<Product>()
+    .Where(p => p.Maker.Name == "Acme" && p.Maker.HeadOffice.City == "Oslo")
+    .OrderByAscending(p => p.Maker.Name);
+```
+
+### Collection (array) membership
+
+Use `Contains` on a document's own collection field to match documents whose array
+holds a given value:
+
+```csharp
+// Match products tagged "sale"
+.Where(p => p.Tags.Contains("sale"))
+
+// Negation works too
+.Where(p => !p.Tags.Contains("discontinued"))
+```
+
+> This is distinct from `In`-style filters, where a fixed set is tested against a single
+> field — e.g. `var ids = new[] { "1", "2" }; request.Where(p => ids.Contains(p.Id));`
+
+### Efficient execution on PostgreSQL
+
+On PostgreSQL, equality and collection-membership filters compile to JSONB containment
+(`document @> '{...}'`), which is served by the `GIN(jsonb_path_ops)` index SearchLite
+creates on every index — so these filters stay fast as collections grow. Range and string
+comparisons use JSON path extraction. SQLite provides the same query capabilities using
+`json_extract` and `json_each`.
+
 ## Advanced Usage
 
 ### Batch Indexing

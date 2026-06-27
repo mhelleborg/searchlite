@@ -66,7 +66,7 @@ public static class FilterMapper
             var propertyInfo = (PropertyInfo)member.Member;
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(member),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = Operator.Equal,
                 Value = true
@@ -78,7 +78,7 @@ public static class FilterMapper
             var propertyInfo = (PropertyInfo)member.Member;
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(member),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = Operator.Equal,
                 Value = false
@@ -152,7 +152,7 @@ public static class FilterMapper
 
                 return new FilterNode<T>.Condition
                 {
-                    PropertyName = propertyInfo.Name,
+                    PropertyName = FieldPath.From(memberExpression),
                     PropertyType = propertyInfo.PropertyType!,
                     Operator = nullOperator,
                     Value = true // Use true as a placeholder since we don't need the actual value for null checks
@@ -164,7 +164,7 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(memberExpression),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = value!
@@ -185,13 +185,13 @@ public static class FilterMapper
 
             return methodCall.Method.Name switch
             {
-                nameof(IComparable.CompareTo) or "CompareTo" => HandleCompareToComparison(methodCall, propertyInfo, node.NodeType, comparisonResult),
-                nameof(object.ToString) => HandleToStringComparison(propertyInfo, node.NodeType, comparisonResult),
+                nameof(IComparable.CompareTo) or "CompareTo" => HandleCompareToComparison(methodCall, memberExpression, propertyInfo, node.NodeType, comparisonResult),
+                nameof(object.ToString) => HandleToStringComparison(memberExpression, propertyInfo, node.NodeType, comparisonResult),
                 _ => throw new NotSupportedException($"Method {methodCall.Method.Name} is not supported in binary comparisons")
             };
         }
 
-        private FilterNode<T> HandleCompareToComparison(MethodCallExpression methodCall, PropertyInfo propertyInfo, 
+        private FilterNode<T> HandleCompareToComparison(MethodCallExpression methodCall, MemberExpression memberExpression, PropertyInfo propertyInfo,
             ExpressionType nodeType, object? comparisonResult)
         {
             var compareValue = Expression.Lambda(methodCall.Arguments[0]).Compile().DynamicInvoke();
@@ -237,14 +237,14 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(memberExpression),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = compareValue!
             };
         }
 
-        private FilterNode<T> HandleToStringComparison(PropertyInfo propertyInfo, ExpressionType nodeType, object? comparisonResult)
+        private FilterNode<T> HandleToStringComparison(MemberExpression memberExpression, PropertyInfo propertyInfo, ExpressionType nodeType, object? comparisonResult)
         {
             if (comparisonResult is not string stringValue)
             {
@@ -260,7 +260,7 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(memberExpression),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = stringValue
@@ -356,13 +356,13 @@ public static class FilterMapper
             }
 
             var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty) 
-                ? Operator.IsNullOrEmpty 
+            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty)
+                ? Operator.IsNullOrEmpty
                 : Operator.IsNullOrWhiteSpace;
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(memberExpression),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = true
@@ -377,13 +377,13 @@ public static class FilterMapper
             }
 
             var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty) 
-                ? Operator.IsNotNullOrEmpty 
+            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty)
+                ? Operator.IsNotNullOrEmpty
                 : Operator.IsNotNullOrWhiteSpace;
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(memberExpression),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = true
@@ -425,68 +425,48 @@ public static class FilterMapper
 
         private FilterNode<T> VisitSetOperatorMethod(MethodCallExpression method)
         {
-            // Handle collection.Contains (both static Enumerable.Contains and instance Contains)
-            MemberExpression? targetMember = null;
-            object? collectionValue = null;
+            // Contains comes in two shapes that we map to different operators depending on which
+            // operand is the document field (the parameter-rooted member):
+            //   1. constantCollection.Contains(d.Field)  => In        (value set membership)
+            //   2. d.Collection.Contains(constant)        => CollectionContains (array field holds value)
+            var (collectionExpr, itemExpr) = ExtractContainsOperands(method);
 
-            if (method.Method.Name == nameof(Enumerable.Contains) && method.Method.DeclaringType == typeof(Enumerable))
+            var itemMember = AsParameterRootedMember(itemExpr);
+            var collectionMember = AsParameterRootedMember(collectionExpr);
+
+            // Case 1: the item is the document field, the collection is a constant.
+            if (itemMember != null && collectionMember == null)
             {
-                // Static Enumerable.Contains(collection, item)
-                if (method.Arguments.Count == 2 && method.Arguments[1] is MemberExpression member)
+                var leaf = (PropertyInfo)itemMember.Member;
+                var collectionValue = GetCollectionValue(collectionExpr)
+                    ?? throw new NotSupportedException("Unsupported Contains usage - unable to evaluate the collection");
+
+                return new FilterNode<T>.Condition
                 {
-                    targetMember = member;
-                    collectionValue = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
-                }
-            }
-            else if (method.Method.Name == "Contains" && method.Method.DeclaringType?.FullName == "System.MemoryExtensions")
-            {
-                // MemoryExtensions.Contains (for Span<T>/ReadOnlySpan<T> operations on arrays)
-                if (method.Arguments.Count == 2 && method.Arguments[1] is MemberExpression member)
-                {
-                    targetMember = member;
-                    collectionValue = GetCollectionValue(method.Arguments[0]);
-                }
-            }
-            else if (method.Method.Name == "Contains" && method.Object != null)
-            {
-                // Instance collection.Contains(item)
-                if (method.Arguments.Count == 1 && method.Arguments[0] is MemberExpression member)
-                {
-                    targetMember = member;
-                    collectionValue = Expression.Lambda(method.Object).Compile().DynamicInvoke();
-                }
-            }
-            else if (method.Method.Name == "Contains")
-            {
-                // Handle extension method calls like array.Contains(x.Property)
-                // This is compiled as static method call: Contains(array, x.Property)
-                if (method.Arguments.Count == 2 && method.Arguments[1] is MemberExpression member)
-                {
-                    targetMember = member;
-                    collectionValue = GetCollectionValue(method.Arguments[0]);
-                }
-                // Handle instance method calls like list.Contains(x.Property) 
-                else if (method.Arguments.Count == 1 && method.Arguments[0] is MemberExpression member2 && method.Object != null)
-                {
-                    targetMember = member2;
-                    collectionValue = Expression.Lambda(method.Object).Compile().DynamicInvoke();
-                }
+                    PropertyName = FieldPath.From(itemMember),
+                    PropertyType = leaf.PropertyType,
+                    Operator = Operator.In,
+                    Value = collectionValue
+                };
             }
 
-            if (targetMember == null || collectionValue == null)
+            // Case 2: the collection is the document field (an array/list), the item is a constant.
+            if (collectionMember != null && itemMember == null)
             {
-                throw new NotSupportedException("Unsupported Contains usage - unable to extract property and collection");
+                var leaf = (PropertyInfo)collectionMember.Member;
+                var itemValue = Expression.Lambda(itemExpr).Compile().DynamicInvoke()
+                    ?? throw new NotSupportedException("Unsupported Contains usage - the searched value cannot be null");
+
+                return new FilterNode<T>.Condition
+                {
+                    PropertyName = FieldPath.From(collectionMember),
+                    PropertyType = leaf.PropertyType,
+                    Operator = Operator.CollectionContains,
+                    Value = itemValue
+                };
             }
 
-            var targetPropertyInfo = (PropertyInfo)targetMember.Member;
-
-            return new FilterNode<T>.Condition
-            {
-                PropertyName = targetPropertyInfo.Name,
-                PropertyType = targetPropertyInfo.PropertyType,
-                Operator = Operator.In,
-                Value = collectionValue
-            };
+            throw new NotSupportedException("Unsupported Contains usage - exactly one operand must be a document field");
         }
 
         private FilterNode<T> VisitNegatedSetOperatorMethod(MethodCallExpression method)
@@ -498,6 +478,7 @@ public static class FilterMapper
                 {
                     Operator.Contains => Operator.NotContains,
                     Operator.In => Operator.NotIn,
+                    Operator.CollectionContains => Operator.CollectionNotContains,
                     _ => throw new NotSupportedException($"Cannot negate operator {condition.Operator}")
                 };
 
@@ -511,6 +492,51 @@ public static class FilterMapper
             }
 
             throw new NotSupportedException("Cannot negate non-condition result");
+        }
+
+        /// <summary>
+        /// Extracts the (collection, item) operands from a Contains call, normalizing across the
+        /// static <c>Enumerable.Contains(collection, item)</c> / <c>MemoryExtensions.Contains</c>
+        /// forms and the instance <c>collection.Contains(item)</c> form.
+        /// </summary>
+        private static (Expression collection, Expression item) ExtractContainsOperands(MethodCallExpression method)
+        {
+            if (method.Object == null && method.Arguments.Count == 2)
+            {
+                return (method.Arguments[0], method.Arguments[1]);
+            }
+
+            if (method.Object != null && method.Arguments.Count == 1)
+            {
+                return (method.Object, method.Arguments[0]);
+            }
+
+            throw new NotSupportedException("Unsupported Contains usage - unable to extract operands");
+        }
+
+        /// <summary>
+        /// Returns the member expression when <paramref name="expression"/> is a member access
+        /// chain rooted at the lambda parameter (a document field); otherwise null.
+        /// </summary>
+        private static MemberExpression? AsParameterRootedMember(Expression? expression)
+        {
+            if (expression is UnaryExpression { NodeType: ExpressionType.Convert } convert)
+            {
+                expression = convert.Operand;
+            }
+
+            if (expression is not MemberExpression member)
+            {
+                return null;
+            }
+
+            Expression? current = member;
+            while (current is MemberExpression m)
+            {
+                current = m.Expression;
+            }
+
+            return current is ParameterExpression ? member : null;
         }
 
         private static object? GetCollectionValue(Expression expression)
@@ -561,7 +587,7 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = propertyInfo.Name,
+                PropertyName = FieldPath.From(memberExpression),
                 PropertyType = propertyInfo.PropertyType!,
                 Operator = operatorType,
                 Value = value!
@@ -646,7 +672,7 @@ public static class FilterMapper
             {
                 nameof(object.Equals) => new FilterNode<T>.Condition
                 {
-                    PropertyName = propertyInfo.Name,
+                    PropertyName = FieldPath.From(memberExpression),
                     PropertyType = propertyInfo.PropertyType!,
                     Operator = Operator.Equal,
                     Value = value!
@@ -709,7 +735,7 @@ public static class FilterMapper
 
                 return new FilterNode<T>.Condition
                 {
-                    PropertyName = propertyInfo.Name,
+                    PropertyName = FieldPath.From(memberExpression),
                     PropertyType = propertyInfo.PropertyType!,
                     Operator = Operator.NotEqual,
                     Value = value!

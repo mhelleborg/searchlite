@@ -10,16 +10,21 @@ public static class OrderByMapper
     /// </summary>
     public static OrderByNode<T> Map<T, TKey>(Expression<Func<T, TKey>> keySelector, SortDirection direction)
     {
-        if (keySelector.Body is not MemberExpression memberExpression)
+        var body = keySelector.Body;
+        // Unwrap conversions inserted for value-type key selectors (e.g. enums, nullable).
+        if (body is UnaryExpression { NodeType: ExpressionType.Convert } convert)
         {
-            throw new ArgumentException("Only simple property access expressions are supported", nameof(keySelector));
+            body = convert.Operand;
         }
 
-        var propertyInfo = (PropertyInfo)memberExpression.Member;
+        if (body is not MemberExpression memberExpression)
+        {
+            throw new ArgumentException("Only property access expressions are supported", nameof(keySelector));
+        }
 
         return new OrderByNode<T>
         {
-            PropertyName = propertyInfo.Name,
+            PropertyName = FieldPath.From(memberExpression),
             Direction = direction
         };
     }
