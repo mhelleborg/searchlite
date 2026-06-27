@@ -151,7 +151,7 @@ public abstract partial class IndexTests
     }
 
     [Fact]
-    public async Task SearchAsync_WithOptions_ShouldRespectMaxResultsWithFullText()
+    public async Task SearchAsync_WithOptions_ShouldRespectTakeWithFullText()
     {
         // Arrange
         var docs = Enumerable.Range(1, 10).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });
@@ -172,7 +172,7 @@ public abstract partial class IndexTests
     }
 
     [Fact]
-    public async Task SearchAsync_WithOptions_ShouldRespectMaxResults()
+    public async Task SearchAsync_WithOptions_ShouldRespectTake()
     {
         // Arrange
         var docs = Enumerable.Range(1, 10).Select(i => new TestDocument { Id = i.ToString(), Title = $"Doc {i}" });

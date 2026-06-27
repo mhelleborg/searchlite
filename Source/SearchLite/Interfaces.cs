@@ -1,23 +1,26 @@
 ﻿namespace SearchLite;
 
 /// <summary>
-/// Indexable documents must implement this interface.
+/// Common interface for searchable documents.
 /// </summary>
 public interface ISearchableDocument
 {
     /// <summary>
-    /// Unique identifier within the index.
+    /// Document key within the collection. Deletes and updates are based on this key. It is not a
+    /// global unique identifier, but must be unique within the collection.
     /// </summary>
     string Id { get; }
 
     /// <summary>
-    /// The searchable text for the document.
+    /// The text that will be included as input to the full text search engine.
+    /// Other parts of the document are ignored for full text search, but can still be used for
+    /// filtering and ordering.
     /// </summary>
     string GetSearchText();
 }
 
 
-public class SearchResult<T>
+public class SearchResult<T> where T: ISearchableDocument
 {
     public required string Id { get; init; }
     public required float Score { get; init; }
@@ -25,7 +28,7 @@ public class SearchResult<T>
     public T? Document { get; init; }
 }
 
-public class SearchResponse<T>
+public class SearchResponse<T> where T: ISearchableDocument
 {
     public required IReadOnlyList<SearchResult<T>> Results { get; init; }
     public long TotalCount { get; init; }

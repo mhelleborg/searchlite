@@ -16,9 +16,9 @@ public class SearchOptions
 
     /// <summary>
     /// Score threshold to include in the results.
-    /// Note: the score for a document is not comparable across providers, as each backend
-    /// uses its own relevance metric (e.g. PostgreSQL <c>ts_rank</c>, SQLite FTS5 rank). Treat
-    /// <see cref="MinScore"/> as a provider-specific tuning knob, not a portable value.
+    /// Note: the score for a document is not comparable across providers — scores are not
+    /// normalized, and each backend uses its own relevance metric (e.g. PostgreSQL <c>ts_rank</c>,
+    /// SQLite FTS5 rank). Treat <see cref="MinScore"/> as a provider-specific tuning knob.
     /// </summary>
     public float MinScore { get; init; } = 0.0f;
 
