@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>SearchLite.CosmosDB</RootNamespace>
+        <!-- The Cosmos SDK ships a build check that fails unless Newtonsoft.Json is
+             referenced. SearchLite only uses System.Text.Json on its own surface, so we
+             opt out of the check; the SDK still resolves its own Newtonsoft dependency. -->
+        <AzureCosmosDisableNewtonsoftJsonCheck>true</AzureCosmosDisableNewtonsoftJsonCheck>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Azure.Cosmos" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SearchLite\SearchLite.csproj" />
+    </ItemGroup>
+
+</Project>

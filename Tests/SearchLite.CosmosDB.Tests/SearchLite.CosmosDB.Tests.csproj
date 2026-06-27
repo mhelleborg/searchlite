@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <LangVersion>preview</LangVersion>
+    <RootNamespace>SearchLite.CosmosDB.Tests</RootNamespace>
+    <!-- Cosmos SDK build-time Newtonsoft.Json check; SearchLite uses System.Text.Json. -->
+    <AzureCosmosDisableNewtonsoftJsonCheck>true</AzureCosmosDisableNewtonsoftJsonCheck>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Testcontainers.CosmosDb" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Source\SearchLite.CosmosDB\SearchLite.CosmosDB.csproj" />
+    <ProjectReference Include="..\..\Source\SearchLite\SearchLite.csproj" />
+    <!-- Reuse the shared abstract conformance suite (SearchLite.Tests.IndexTests). -->
+    <ProjectReference Include="..\SearchLite.Tests\SearchLite.Tests.csproj" />
+  </ItemGroup>
+</Project>
