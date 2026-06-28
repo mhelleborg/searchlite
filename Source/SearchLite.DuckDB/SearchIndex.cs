@@ -121,53 +121,46 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
 
     public async Task IndexManyAsync(IEnumerable<T> documents, CancellationToken ct = default)
     {
+        var rows = documents
+            .Select(d => (d.Id, Document: JsonSerializer.Serialize(d), Text: d.GetSearchText()))
+            .ToList();
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
         await _gate.WaitAsync(ct);
         try
         {
-            await using var transaction = await _connection.BeginTransactionAsync(ct);
-            try
+            // Bulk path: the DuckDB Appender loads all rows in one native operation — thousands of
+            // per-row INSERT round-trips are far too slow (DuckDB is columnar). The appender can't do
+            // ON CONFLICT, so stage the rows and upsert from the staging table.
+            var staging = $"{TableName}_stg";
+            await ExecAsync($"CREATE OR REPLACE TABLE {staging} (id VARCHAR, document VARCHAR, search_text VARCHAR);", ct);
+
+            using (var appender = _connection.CreateAppender(staging))
             {
-                // Reuse a single prepared command across all rows. Re-creating the command (and thus
-                // re-parsing/re-planning the statement) per row makes bulk loads of thousands of rows
-                // an order of magnitude slower.
-                await using var cmd = _connection.CreateCommand();
-                cmd.Transaction = transaction;
-                cmd.CommandText = $"""
-                                   INSERT INTO {TableName} (id, document, search_text, last_updated)
-                                   VALUES ($id, $doc, $text, now())
-                                   ON CONFLICT (id) DO UPDATE SET
-                                       document = excluded.document,
-                                       search_text = excluded.search_text,
-                                       last_updated = now();
-                                   """;
-                var idParam = new DuckDBParameter("id", string.Empty);
-                var docParam = new DuckDBParameter("doc", string.Empty);
-                var textParam = new DuckDBParameter("text", string.Empty);
-                cmd.Parameters.Add(idParam);
-                cmd.Parameters.Add(docParam);
-                cmd.Parameters.Add(textParam);
-
-                var any = false;
-                foreach (var document in documents)
+                foreach (var (id, document, text) in rows)
                 {
-                    idParam.Value = document.Id;
-                    docParam.Value = JsonSerializer.Serialize(document);
-                    textParam.Value = document.GetSearchText();
-                    await cmd.ExecuteNonQueryAsync(ct);
-                    any = true;
-                }
-
-                await transaction.CommitAsync(ct);
-                if (any)
-                {
-                    _ftsDirty = true;
+                    appender.CreateRow()
+                        .AppendValue(id)
+                        .AppendValue(document)
+                        .AppendValue(text)
+                        .EndRow();
                 }
             }
-            catch
-            {
-                await transaction.RollbackAsync(ct);
-                throw;
-            }
+
+            await ExecAsync($"""
+                             INSERT INTO {TableName} (id, document, search_text, last_updated)
+                             SELECT id, document, search_text, now() FROM {staging}
+                             ON CONFLICT (id) DO UPDATE SET
+                                 document = excluded.document,
+                                 search_text = excluded.search_text,
+                                 last_updated = now();
+                             DROP TABLE {staging};
+                             """, ct);
+
+            _ftsDirty = true;
         }
         finally
         {
