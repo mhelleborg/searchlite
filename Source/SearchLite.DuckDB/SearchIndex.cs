@@ -127,26 +127,41 @@ public sealed partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchab
             await using var transaction = await _connection.BeginTransactionAsync(ct);
             try
             {
+                // Reuse a single prepared command across all rows. Re-creating the command (and thus
+                // re-parsing/re-planning the statement) per row makes bulk loads of thousands of rows
+                // an order of magnitude slower.
+                await using var cmd = _connection.CreateCommand();
+                cmd.Transaction = transaction;
+                cmd.CommandText = $"""
+                                   INSERT INTO {TableName} (id, document, search_text, last_updated)
+                                   VALUES ($id, $doc, $text, now())
+                                   ON CONFLICT (id) DO UPDATE SET
+                                       document = excluded.document,
+                                       search_text = excluded.search_text,
+                                       last_updated = now();
+                                   """;
+                var idParam = new DuckDBParameter("id", string.Empty);
+                var docParam = new DuckDBParameter("doc", string.Empty);
+                var textParam = new DuckDBParameter("text", string.Empty);
+                cmd.Parameters.Add(idParam);
+                cmd.Parameters.Add(docParam);
+                cmd.Parameters.Add(textParam);
+
+                var any = false;
                 foreach (var document in documents)
                 {
-                    await using var cmd = _connection.CreateCommand();
-                    cmd.Transaction = transaction;
-                    cmd.CommandText = $"""
-                                       INSERT INTO {TableName} (id, document, search_text, last_updated)
-                                       VALUES ($id, $doc, $text, now())
-                                       ON CONFLICT (id) DO UPDATE SET
-                                           document = excluded.document,
-                                           search_text = excluded.search_text,
-                                           last_updated = now();
-                                       """;
-                    cmd.Parameters.Add(new DuckDBParameter("id", document.Id));
-                    cmd.Parameters.Add(new DuckDBParameter("doc", JsonSerializer.Serialize(document)));
-                    cmd.Parameters.Add(new DuckDBParameter("text", document.GetSearchText()));
+                    idParam.Value = document.Id;
+                    docParam.Value = JsonSerializer.Serialize(document);
+                    textParam.Value = document.GetSearchText();
                     await cmd.ExecuteNonQueryAsync(ct);
+                    any = true;
                 }
 
                 await transaction.CommitAsync(ct);
-                _ftsDirty = true;
+                if (any)
+                {
+                    _ftsDirty = true;
+                }
             }
             catch
             {
