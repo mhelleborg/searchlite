@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -134,7 +135,7 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
 
         var scoreExpression = hasQuery
             ? "MATCH(search_text) AGAINST(@Query IN BOOLEAN MODE)"
-            : "0";
+            : "CAST(0 AS DOUBLE)";
 
         var clauses = BuildWhereClauses(request, hasQuery);
         var orderClause = BuildOrderByClause(request) ?? "ORDER BY score DESC";
@@ -171,7 +172,9 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
         {
             while (await reader.ReadAsync(ct))
             {
-                var score = (float)reader.GetDouble(2);
+                // The score column is DOUBLE for FTS queries and CAST(0 AS DOUBLE) otherwise, but
+                // read it tolerantly so an unexpected provider/server numeric type can't throw.
+                var score = Convert.ToSingle(reader.GetValue(2), CultureInfo.InvariantCulture);
                 maxScore = Math.Max(maxScore, score);
                 var json = reader.GetString(1);
                 totalCount = reader.GetInt64(4);
@@ -229,8 +232,7 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
         var orderClauses = request.OrderBys.Select(order =>
         {
             var direction = order.Direction == SortDirection.Ascending ? "ASC" : "DESC";
-            var path = "$." + string.Join(".", FieldPath.Split(order.PropertyName));
-            return $"JSON_EXTRACT(document, '{path}') {direction}";
+            return $"{WhereClauseBuilder<T>.BuildOrderAccessor(order.PropertyName)} {direction}";
         });
         return $"ORDER BY {string.Join(", ", orderClauses)}";
     }
@@ -324,7 +326,7 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
                    CREATE TABLE IF NOT EXISTS {TableName} (
                        id VARCHAR(255) NOT NULL,
                        document JSON,
-                       search_text TEXT,
+                       search_text LONGTEXT,
                        last_updated TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                        PRIMARY KEY (id),
                        FULLTEXT KEY {TableName}_ft (search_text)
@@ -414,10 +416,14 @@ public partial class SearchIndex<T> : ISearchIndex<T> where T : ISearchableDocum
 
             if (includePartialMatches)
             {
-                builder.Append(term).Append('*');
+                // Partial = match ANY term (boolean-mode OR of bare, exact tokens). This mirrors the
+                // SQLite/Postgres providers: it is term-level OR, NOT prefix matching — a query that
+                // tokenizes to "c" must match the token "c", not every word starting with c.
+                builder.Append(term);
             }
             else
             {
+                // Non-partial = every term required (AND).
                 builder.Append('+').Append(term);
             }
         }

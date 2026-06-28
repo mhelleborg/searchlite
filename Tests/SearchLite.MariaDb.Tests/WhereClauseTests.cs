@@ -52,7 +52,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Age > 18);
 
-        clause.Sql.Should().Be("CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) > @p0");
+        clause.Sql.Should().Be($"{Cast("$.Age", "SIGNED")} > @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(18);
     }
@@ -100,7 +100,7 @@ public class WhereClauseTests
     public void Should_Handle_Double_Comparison()
     {
         var clause = BuildClause(x => x.Score >= 95.5);
-        clause.Sql.Should().Be("CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Score')) AS DECIMAL(65,30)) >= @p0");
+        clause.Sql.Should().Be($"{Cast("$.Score", "DECIMAL(65,30)")} >= @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(95.5);
     }
@@ -110,7 +110,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Price < 199.99m);
 
-        clause.Sql.Should().Be("CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Price')) AS DECIMAL(65,30)) < @p0");
+        clause.Sql.Should().Be($"{Cast("$.Price", "DECIMAL(65,30)")} < @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(199.99m);
     }
@@ -121,7 +121,7 @@ public class WhereClauseTests
         var date = new DateTime(2024, 1, 1);
         var clause = BuildClause(x => x.CreatedAt > date);
 
-        clause.Sql.Should().Be("CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.CreatedAt')) AS DATETIME(6)) > @p0");
+        clause.Sql.Should().Be($"{Cast("$.CreatedAt", "DATETIME(6)")} > @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(date);
     }
@@ -132,7 +132,7 @@ public class WhereClauseTests
         var clause = BuildClause(x => x.Age > 18 && x.IsActive == true);
 
         clause.Sql.Should().Be(
-            "(CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) > @p0 AND " +
+            $"({Cast("$.Age", "SIGNED")} > @p0 AND " +
             "JSON_CONTAINS(document, @p1, '$.IsActive'))");
         clause.Parameters.Should().HaveCount(2);
         clause.Parameters[0].Value.Should().Be(18);
@@ -158,8 +158,8 @@ public class WhereClauseTests
             (x.Age > 18 && x.IsActive == true) || (x.Score >= 95.5 && x.Name == "John"));
 
         clause.Sql.Should().Be(
-            "((CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) > @p0 AND JSON_CONTAINS(document, @p1, '$.IsActive')) OR " +
-            "(CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Score')) AS DECIMAL(65,30)) >= @p2 AND JSON_CONTAINS(document, @p3, '$.Name')))");
+            $"(({Cast("$.Age", "SIGNED")} > @p0 AND JSON_CONTAINS(document, @p1, '$.IsActive')) OR " +
+            $"({Cast("$.Score", "DECIMAL(65,30)")} >= @p2 AND JSON_CONTAINS(document, @p3, '$.Name')))");
         clause.Parameters.Should().HaveCount(4);
         clause.Parameters[0].Value.Should().Be(18);
         clause.Parameters[1].Value.Should().Be("true");
@@ -179,7 +179,7 @@ public class WhereClauseTests
         var clauses = BuildClauses(predicates).ToList();
 
         clauses.Should().HaveCount(2);
-        clauses[0].Sql.Should().Be("CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) > @p0");
+        clauses[0].Sql.Should().Be($"{Cast("$.Age", "SIGNED")} > @p0");
         clauses[1].Sql.Should().Be("JSON_CONTAINS(document, @p0, '$.IsActive')");
         clauses[0].Parameters.Should().HaveCount(1);
         clauses[1].Parameters.Should().HaveCount(1);
@@ -208,10 +208,10 @@ public class WhereClauseTests
         // Range comparisons keep the cast-and-compare form.
         (Expression<Func<TestModel, bool>> expression, string expected)[] comparisonCases =
         [
-            (x => x.Age > 18, "CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) > @p0"),
-            (x => x.Age >= 18, "CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) >= @p0"),
-            (x => x.Age < 18, "CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) < @p0"),
-            (x => x.Age <= 18, "CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Age')) AS SIGNED) <= @p0")
+            (x => x.Age > 18, $"{Cast("$.Age", "SIGNED")} > @p0"),
+            (x => x.Age >= 18, $"{Cast("$.Age", "SIGNED")} >= @p0"),
+            (x => x.Age < 18, $"{Cast("$.Age", "SIGNED")} < @p0"),
+            (x => x.Age <= 18, $"{Cast("$.Age", "SIGNED")} <= @p0")
         ];
 
         foreach (var testCase in comparisonCases)
@@ -280,7 +280,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Author.Rank > 3);
 
-        clause.Sql.Should().Be("CAST(JSON_UNQUOTE(JSON_EXTRACT(document, '$.Author.Rank')) AS SIGNED) > @p0");
+        clause.Sql.Should().Be($"{Cast("$.Author.Rank", "SIGNED")} > @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be(3);
     }
@@ -290,7 +290,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Author.Name == null);
 
-        clause.Sql.Should().Be("JSON_UNQUOTE(JSON_EXTRACT(document, '$.Author.Name')) IS NULL");
+        clause.Sql.Should().Be($"{Acc("$.Author.Name")} IS NULL");
         clause.Parameters.Should().HaveCount(0);
     }
 
@@ -299,7 +299,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Author.Name.Contains("li"));
 
-        clause.Sql.Should().Be("JSON_UNQUOTE(JSON_EXTRACT(document, '$.Author.Name')) LIKE @p0");
+        clause.Sql.Should().Be($"{Acc("$.Author.Name")} LIKE @p0");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("%li%");
     }
@@ -333,6 +333,12 @@ public class WhereClauseTests
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("\"admin\"");
     }
+
+    // The scalar accessor: SQL NULL for JSON null / missing key, the unquoted value otherwise.
+    private static string Acc(string path) =>
+        $"(CASE WHEN JSON_TYPE(JSON_EXTRACT(document, '{path}')) = 'NULL' THEN NULL ELSE JSON_UNQUOTE(JSON_EXTRACT(document, '{path}')) END)";
+
+    private static string Cast(string path, string type) => $"CAST({Acc(path)} AS {type})";
 
     private static Clause BuildClause(Expression<Func<TestModel, bool>> predicate) => BuildClauses(predicate).Single();
 

@@ -73,13 +73,68 @@ public static class WhereClauseBuilder<T>
     }
 
     /// <summary>
-    /// Builds an unquoting text accessor for the given dotted property path.
-    /// Uses JSON_UNQUOTE(JSON_EXTRACT(document, 'path')) so that string comparisons
-    /// operate on the underlying scalar value rather than the quoted JSON literal.
+    /// Builds a scalar text accessor for the given dotted property path that yields SQL NULL for a
+    /// JSON null OR a missing key, and the unquoted scalar text otherwise (preserving the empty
+    /// string). This is deliberately NOT JSON_VALUE — MariaDB's JSON_VALUE collapses an empty
+    /// string to NULL and nulls out objects — and NOT a bare JSON_UNQUOTE(JSON_EXTRACT(...)), which
+    /// returns the literal text 'null' for a present-but-null field. Both break IS NULL /
+    /// IsNullOrEmpty / ordering / nested null-guard semantics. The CASE on JSON_TYPE handles every
+    /// case: missing -> JSON_EXTRACT is SQL NULL; JSON null -> JSON_TYPE 'NULL'; anything else
+    /// (incl. "") -> the unquoted value, and for an object the (non-null) object text so an
+    /// IS NOT NULL guard on a nested object still holds.
     /// </summary>
     private static string BuildTextAccessor(string propertyName)
     {
-        return $"JSON_UNQUOTE(JSON_EXTRACT(document, '{BuildJsonPath(propertyName)}'))";
+        var extract = $"JSON_EXTRACT(document, '{BuildJsonPath(propertyName)}')";
+        return $"(CASE WHEN JSON_TYPE({extract}) = 'NULL' THEN NULL ELSE JSON_UNQUOTE({extract}) END)";
+    }
+
+    /// <summary>
+    /// Builds an ORDER BY accessor for a dotted property path. Uses the scalar accessor (so a JSON
+    /// null / missing key sorts as SQL NULL rather than as a JSON-null value), and casts numeric
+    /// fields so they sort numerically instead of lexically ("100" before "20"). Other types
+    /// (string, DateTime as ISO text, Guid, bool, enum) order on their text form.
+    /// </summary>
+    public static string BuildOrderAccessor(string propertyName)
+    {
+        var accessor = BuildTextAccessor(propertyName);
+        var leaf = ResolveLeafType(propertyName);
+        if (leaf == null)
+        {
+            return accessor;
+        }
+
+        var underlying = Nullable.GetUnderlyingType(leaf) ?? leaf;
+        string? cast = null;
+        if (underlying == typeof(int) || underlying == typeof(long) || underlying == typeof(short)
+            || underlying == typeof(byte) || underlying == typeof(char))
+        {
+            cast = "SIGNED";
+        }
+        else if (underlying == typeof(double) || underlying == typeof(float) || underlying == typeof(decimal))
+        {
+            cast = "DECIMAL(65,30)";
+        }
+
+        return cast == null ? accessor : $"CAST({accessor} AS {cast})";
+    }
+
+    private static Type? ResolveLeafType(string propertyName)
+    {
+        Type? current = typeof(T);
+        foreach (var segment in FieldPath.Split(propertyName))
+        {
+            var prop = current?.GetProperty(segment,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
+            if (prop == null)
+            {
+                return null;
+            }
+
+            current = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+        }
+
+        return current;
     }
 
     private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
@@ -358,12 +413,16 @@ public static class WhereClauseBuilder<T>
     {
         var fieldExpression = BuildTextAccessor(propertyName);
 
+        // Emptiness is tested with CHAR_LENGTH, not `= ''`: MySQL's PAD SPACE collation treats a
+        // string of only spaces ("   ") as equal to '', which would make IsNullOrEmpty wrongly match
+        // whitespace. CHAR_LENGTH counts the actual characters.
+        var trimmed = $"TRIM(REPLACE(REPLACE(REPLACE({fieldExpression}, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' '))";
         return op switch
         {
-            Operator.IsNullOrEmpty => $"({fieldExpression} IS NULL OR {fieldExpression} = '')",
-            Operator.IsNotNullOrEmpty => $"({fieldExpression} IS NOT NULL AND {fieldExpression} != '')",
-            Operator.IsNullOrWhiteSpace => $"({fieldExpression} IS NULL OR TRIM(REPLACE(REPLACE(REPLACE({fieldExpression}, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')) = '')",
-            Operator.IsNotNullOrWhiteSpace => $"({fieldExpression} IS NOT NULL AND TRIM(REPLACE(REPLACE(REPLACE({fieldExpression}, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')) != '')",
+            Operator.IsNullOrEmpty => $"({fieldExpression} IS NULL OR CHAR_LENGTH({fieldExpression}) = 0)",
+            Operator.IsNotNullOrEmpty => $"({fieldExpression} IS NOT NULL AND CHAR_LENGTH({fieldExpression}) > 0)",
+            Operator.IsNullOrWhiteSpace => $"({fieldExpression} IS NULL OR CHAR_LENGTH({trimmed}) = 0)",
+            Operator.IsNotNullOrWhiteSpace => $"({fieldExpression} IS NOT NULL AND CHAR_LENGTH({trimmed}) > 0)",
             _ => throw new NotSupportedException($"String operator {op} is not supported")
         };
     }
