@@ -15,7 +15,7 @@
     <!-- Pin the native SQLite binary forward of the GHSA-2m69-gcr7-jv3q advisory
          (covers all 2.x); Microsoft.Data.Sqlite still resolves the managed core. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.203" />
     <PackageVersion Include="MySqlConnector" Version="2.4.0" />
     <PackageVersion Include="Npgsql" Version="9.0.3" />
