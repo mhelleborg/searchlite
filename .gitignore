@@ -32,3 +32,6 @@ node_modules/
 # Task files
 # tasks.json
 # tasks/ 
+
+# Test run artifacts
+[Tt]est[Rr]esults/
