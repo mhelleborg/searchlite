@@ -62,7 +62,35 @@ public static class FieldPath
     }
 
     /// <summary>
-    /// Splits a dot-separated field path into its segments.
+    /// Splits a dot-separated field path into its segments. The empty path (the scope root
+    /// itself) yields no segments.
     /// </summary>
-    public static string[] Split(string path) => path.Split('.');
+    public static string[] Split(string path) =>
+        string.IsNullOrEmpty(path) ? [] : path.Split('.');
+
+    /// <summary>
+    /// Walks a dot-separated path from <paramref name="rootType"/> and returns the
+    /// <see cref="PropertyInfo"/> of the leaf segment, or null when the path is empty or any
+    /// segment cannot be resolved. Nullable wrappers are unwrapped along the way.
+    /// </summary>
+    public static PropertyInfo? ResolveProperty(Type rootType, string path)
+    {
+        PropertyInfo? property = null;
+        var current = rootType;
+
+        foreach (var segment in Split(path))
+        {
+            var owner = Nullable.GetUnderlyingType(current) ?? current;
+            property = owner.GetProperty(segment,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            if (property == null)
+            {
+                return null;
+            }
+
+            current = property.PropertyType;
+        }
+
+        return property;
+    }
 }

@@ -33,6 +33,13 @@ public class WhereClauseTests
         public required List<string> Roles { get; set; }
     }
 
+    public class TestItem
+    {
+        public required string Sku { get; set; }
+        public int Qty { get; set; }
+        public required List<string> Tags { get; set; }
+    }
+
     public class TestModel
     {
         public int Age { get; set; }
@@ -45,6 +52,7 @@ public class WhereClauseTests
         public TestStringEnum StringEnumValue { get; set; }
         public required Author Author { get; set; }
         public required List<string> Labels { get; set; }
+        public required List<TestItem> Items { get; set; }
     }
 
     [Fact]
@@ -331,6 +339,122 @@ public class WhereClauseTests
         clause.Sql.Should().Be("document @> @p0::jsonb");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("{\"Author\":{\"Roles\":[\"admin\"]}}");
+    }
+
+    private const string ItemsSource =
+        "jsonb_array_elements(CASE WHEN jsonb_typeof(document->'Items') = 'array' THEN document->'Items' ELSE '[]'::jsonb END) AS e0";
+
+    private const string LabelsSource =
+        "jsonb_array_elements(CASE WHEN jsonb_typeof(document->'Labels') = 'array' THEN document->'Labels' ELSE '[]'::jsonb END) AS e0";
+
+    [Fact]
+    public void Should_Handle_Any_WithEquality_AsContainment()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Sku == "abc"));
+
+        clause.Sql.Should().Be("document @> @p0::jsonb");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("{\"Items\":[{\"Sku\":\"abc\"}]}");
+    }
+
+    [Fact]
+    public void Should_Handle_Any_WithConjunctionOfEqualities_AsSingleContainment()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Sku == "abc" && i.Qty == 2));
+
+        clause.Sql.Should().Be("document @> @p0::jsonb");
+        clause.Parameters[0].Value.Should().Be("{\"Items\":[{\"Sku\":\"abc\",\"Qty\":2}]}");
+    }
+
+    [Fact]
+    public void Should_Handle_Any_WithNestedCollectionContains_AsContainment()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Tags.Contains("t")));
+
+        clause.Sql.Should().Be("document @> @p0::jsonb");
+        clause.Parameters[0].Value.Should().Be("{\"Items\":[{\"Tags\":[\"t\"]}]}");
+    }
+
+    [Fact]
+    public void Should_Handle_Any_WithRange_AsExists()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Qty > 1));
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {ItemsSource} WHERE (e0->>'Qty')::integer > @p0)");
+        clause.Parameters[0].Value.Should().Be(1);
+    }
+
+    [Fact]
+    public void Should_Handle_Any_WithMixedPredicate_AsExists()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Sku == "abc" && i.Qty > 1));
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {ItemsSource} WHERE (e0 @> @p0::jsonb AND (e0->>'Qty')::integer > @p1))");
+        clause.Parameters[0].Value.Should().Be("{\"Sku\":\"abc\"}");
+        clause.Parameters[1].Value.Should().Be(1);
+    }
+
+    [Fact]
+    public void Should_Handle_All()
+    {
+        var clause = BuildClause(x => x.Items.All(i => i.Qty > 1));
+
+        clause.Sql.Should().Be($"NOT EXISTS (SELECT 1 FROM {ItemsSource} WHERE NOT ((e0->>'Qty')::integer > @p0))");
+    }
+
+    [Fact]
+    public void Should_Handle_Any_WithoutPredicate()
+    {
+        var clause = BuildClause(x => x.Items.Any());
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {ItemsSource})");
+        clause.Parameters.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Should_Handle_Negated_Any()
+    {
+        var clause = BuildClause(x => !x.Items.Any(i => i.Sku == "abc"));
+
+        clause.Sql.Should().Be("NOT (document @> @p0::jsonb)");
+    }
+
+    [Fact]
+    public void Should_Handle_Any_OverScalarCollection()
+    {
+        var clause = BuildClause(x => x.Labels.Any(l => l.StartsWith("a")));
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {LabelsSource} WHERE (e0 #>> '{{}}')::text LIKE @p0)");
+        clause.Parameters[0].Value.Should().Be("a%");
+    }
+
+    [Fact]
+    public void Should_Handle_Count()
+    {
+        var clause = BuildClause(x => x.Labels.Count > 2);
+
+        clause.Sql.Should().Be("(CASE WHEN jsonb_typeof(document->'Labels') = 'array' THEN jsonb_array_length(document->'Labels') ELSE 0 END) > @p0");
+        clause.Parameters[0].Value.Should().Be(2L);
+    }
+
+    [Fact]
+    public void Should_Handle_Count_WithPredicate()
+    {
+        var clause = BuildClause(x => x.Items.Count(i => i.Qty > 1) >= 2);
+
+        clause.Sql.Should().Be($"(SELECT COUNT(*) FROM {ItemsSource} WHERE (e0->>'Qty')::integer > @p0) >= @p1");
+        clause.Parameters.Should().HaveCount(2);
+        clause.Parameters[0].Value.Should().Be(1);
+        clause.Parameters[1].Value.Should().Be(2L);
+    }
+
+    [Fact]
+    public void Should_Handle_Negated_Group()
+    {
+        var clause = BuildClause(x => !(x.Age > 18 || x.Name == "a"));
+
+        clause.Sql.Should().Be("NOT (((document->>'Age')::integer > @p0 OR document @> @p1::jsonb))");
+        clause.Parameters[1].Value.Should().Be("{\"Name\":\"a\"}");
     }
 
     private static Clause BuildClause(Expression<Func<TestModel, bool>> predicate) => BuildClauses(predicate).Single();

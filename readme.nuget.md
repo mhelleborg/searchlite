@@ -62,12 +62,14 @@ foreach (var match in results.Matches)
 
 ## Filtering
 
-LINQ-style `Where` filters support nested document fields and collection membership, across
-both backends:
+LINQ-style `Where` filters support nested document fields, collection membership and
+predicates over collections, across all backends:
 
 ```csharp
-.Where(p => p.Maker.HeadOffice.City == "Oslo")   // nested fields, any depth
-.Where(p => p.Tags.Contains("sale"))             // array/list membership
+.Where(p => p.Maker.HeadOffice.City == "Oslo")            // nested fields, any depth
+.Where(p => p.Tags.Contains("sale"))                      // array/list membership
+.Where(p => p.Variants.Any(v => v.Stock > 0 && v.Active)) // predicates over collections (Any/All)
+.Where(p => p.Tags.Count > 2)                             // collection size
 ```
 
 On PostgreSQL these compile to JSONB containment (`@>`) and use the GIN index for fast lookups.

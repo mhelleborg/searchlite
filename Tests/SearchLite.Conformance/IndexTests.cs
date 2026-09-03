@@ -50,6 +50,10 @@ public abstract partial class IndexTests
         public List<string> Labels { get; init; } = [];
         public List<int> Scores { get; init; } = [];
 
+        // Collection of objects (with nested scalars, enums and collections) for quantifier and
+        // count coverage.
+        public List<LineItem> Items { get; init; } = [];
+
         public string GetSearchText() => $"{Title} {Content} {Description} {Tags}";
     }
 
@@ -64,6 +68,31 @@ public abstract partial class IndexTests
     {
         public string City { get; init; } = "";
         public string Country { get; init; } = "";
+    }
+
+    public class LineItem
+    {
+        public string Sku { get; init; } = "";
+        public int Quantity { get; init; }
+        public decimal Price { get; init; }
+        public bool Shipped { get; init; }
+
+        // Property-level string converter on an element property: exercises enum format
+        // resolution relative to the element type rather than the document type.
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public Priority Priority { get; init; } = Priority.Low;
+
+        // Type-default (integer) enum on an element property.
+        public DangerZone Danger { get; init; } = DangerZone.Low;
+
+        public List<string> Tags { get; init; } = [];
+        public List<Note> Notes { get; init; } = [];
+    }
+
+    public class Note
+    {
+        public string Text { get; init; } = "";
+        public int Rating { get; init; }
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

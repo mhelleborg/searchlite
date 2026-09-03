@@ -10,6 +10,26 @@ public record Clause
 
 public static class WhereClauseBuilder<T>
 {
+    /// <summary>
+    /// The JSON value that field paths are resolved against. At the top level this is the
+    /// <c>document</c> column of type <typeparamref name="T"/>; inside a collection predicate it is
+    /// the unnested JSON element of the enclosing collection.
+    /// </summary>
+    private sealed record Scope(string Root, Type RootType, int Depth)
+    {
+        public static readonly Scope Document = new("document", typeof(T), 0);
+
+        /// <summary>
+        /// Creates the scope for the elements of a collection at this level, returning the alias
+        /// the unnested element column must be given.
+        /// </summary>
+        public (string alias, Scope inner) Nested(Type elementType)
+        {
+            var alias = $"e{Depth}";
+            return (alias, new Scope(alias, elementType, Depth + 1));
+        }
+    }
+
     public static IReadOnlyList<Clause> BuildClauses(List<FilterNode<T>> filters)
     {
         var globalParamCounter = 0;
@@ -19,7 +39,7 @@ public static class WhereClauseBuilder<T>
     private static Clause BuildClause(FilterNode<T> filter, ref int globalParamCounter)
     {
         var parameters = new List<DuckDBParameter>();
-        var sql = BuildSql(filter, ref globalParamCounter, parameters);
+        var sql = BuildSql(filter, Scope.Document, ref globalParamCounter, parameters);
         return new Clause
         {
             Sql = sql,
@@ -27,17 +47,20 @@ public static class WhereClauseBuilder<T>
         };
     }
 
-    private static string BuildSql(FilterNode<T> node, ref int paramCounter, List<DuckDBParameter> parameters)
+    private static string BuildSql(FilterNode<T> node, Scope scope, ref int paramCounter, List<DuckDBParameter> parameters)
     {
         return node switch
         {
-            FilterNode<T>.Condition condition => BuildConditionSql(condition, ref paramCounter, parameters),
-            FilterNode<T>.Group group => BuildGroupSql(group, ref paramCounter, parameters),
+            FilterNode<T>.Condition condition => BuildConditionSql(condition, scope, ref paramCounter, parameters),
+            FilterNode<T>.Group group => BuildGroupSql(group, scope, ref paramCounter, parameters),
+            FilterNode<T>.Not not => $"NOT ({BuildSql(not.Operand, scope, ref paramCounter, parameters)})",
+            FilterNode<T>.Quantifier quantifier => BuildQuantifierSql(quantifier, scope, ref paramCounter, parameters),
+            FilterNode<T>.CollectionCount count => BuildCollectionCountSql(count, scope, ref paramCounter, parameters),
             _ => throw new ArgumentException($"Unsupported node type: {node.GetType()}")
         };
     }
 
-    private static string BuildGroupSql(FilterNode<T>.Group group, ref int paramCounter,
+    private static string BuildGroupSql(FilterNode<T>.Group group, Scope scope, ref int paramCounter,
         List<DuckDBParameter> parameters)
     {
         var op = group.Operator switch
@@ -51,43 +74,108 @@ public static class WhereClauseBuilder<T>
 
         foreach (var condition in group.Conditions)
         {
-            conditions.Add(BuildSql(condition, ref paramCounter, parameters));
+            conditions.Add(BuildSql(condition, scope, ref paramCounter, parameters));
+        }
+
+        if (conditions.Count == 0)
+        {
+            return group.Operator == LogicalOperator.And ? "TRUE" : "FALSE";
         }
 
         return conditions.Count > 1
             ? $"({string.Join(op, conditions)})"
-            : conditions.FirstOrDefault() ?? "TRUE";
+            : conditions[0];
     }
 
-    private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
+    /// <summary>
+    /// JSON path for a dotted property path: "$" for the scope root itself, "$.a.b" otherwise.
+    /// </summary>
+    private static string JsonPath(string propertyName) =>
+        propertyName.Length == 0 ? "$" : $"$.{propertyName}";
+
+    private static string Extract(Scope scope, string propertyName) =>
+        $"json_extract({scope.Root}, '{JsonPath(propertyName)}')";
+
+    private static string ExtractString(Scope scope, string propertyName) =>
+        $"json_extract_string({scope.Root}, '{JsonPath(propertyName)}')";
+
+    /// <summary>
+    /// A derived table that unnests the JSON array at the given path into one JSON element per
+    /// row. A missing or null value casts to a NULL list, which unnests to no rows.
+    /// </summary>
+    private static string ArraySource(Scope scope, string propertyName, string alias) =>
+        $"(SELECT unnest(CAST({Extract(scope, propertyName)} AS JSON[])) AS {alias})";
+
+    private static string BuildQuantifierSql(FilterNode<T>.Quantifier quantifier, Scope scope, ref int paramCounter,
+        List<DuckDBParameter> parameters)
+    {
+        var (alias, inner) = scope.Nested(quantifier.ElementType);
+        var source = ArraySource(scope, quantifier.PropertyName, alias);
+
+        if (quantifier.Predicate == null)
+        {
+            return quantifier.Kind == QuantifierKind.Any
+                ? $"EXISTS (SELECT 1 FROM {source})"
+                : throw new NotSupportedException("All requires a predicate");
+        }
+
+        var predicate = BuildSql(quantifier.Predicate, inner, ref paramCounter, parameters);
+
+        return quantifier.Kind == QuantifierKind.Any
+            ? $"EXISTS (SELECT 1 FROM {source} WHERE {predicate})"
+            : $"NOT EXISTS (SELECT 1 FROM {source} WHERE NOT ({predicate}))";
+    }
+
+    private static string BuildCollectionCountSql(FilterNode<T>.CollectionCount count, Scope scope, ref int paramCounter,
+        List<DuckDBParameter> parameters)
+    {
+        string countExpression;
+        if (count.Predicate == null)
+        {
+            // json_array_length is 0 for a JSON null and NULL for a missing path.
+            countExpression = $"COALESCE(json_array_length({scope.Root}, '{JsonPath(count.PropertyName)}'), 0)";
+        }
+        else
+        {
+            var (alias, inner) = scope.Nested(count.ElementType);
+            var predicate = BuildSql(count.Predicate, inner, ref paramCounter, parameters);
+            countExpression = $"(SELECT COUNT(*) FROM {ArraySource(scope, count.PropertyName, alias)} WHERE {predicate})";
+        }
+
+        var paramName = $"p{paramCounter++}";
+        parameters.Add(new DuckDBParameter(paramName, count.Value));
+        return $"{countExpression} {GetOperatorString(count.Operator)} ${paramName}";
+    }
+
+    private static string BuildConditionSql(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter,
         List<DuckDBParameter> parameters)
     {
         if (IsNullOperator(condition.Operator))
         {
-            return BuildNullCondition(condition.PropertyName, condition.Operator);
+            return BuildNullCondition(scope, condition.PropertyName, condition.Operator);
         }
 
         if (IsStringNullOrEmptyOperator(condition.Operator))
         {
-            return BuildStringNullOrEmptyCondition(condition.PropertyName, condition.Operator);
+            return BuildStringNullOrEmptyCondition(scope, condition.PropertyName, condition.Operator);
         }
 
         if (IsCollectionContainsOperator(condition.Operator))
         {
-            return BuildCollectionContainsCondition(condition, ref paramCounter, parameters);
+            return BuildCollectionContainsCondition(condition, scope, ref paramCounter, parameters);
         }
 
         if (IsSetOperator(condition.Operator))
         {
-            return BuildSetCondition(condition, ref paramCounter, parameters);
+            return BuildSetCondition(condition, scope, ref paramCounter, parameters);
         }
 
         if (IsStringOperator(condition.Operator))
         {
-            return BuildStringCondition(condition, ref paramCounter, parameters);
+            return BuildStringCondition(condition, scope, ref paramCounter, parameters);
         }
 
-        var fieldExpression = BuildFieldExpression(condition.PropertyType, condition.PropertyName);
+        var fieldExpression = BuildFieldExpression(condition.PropertyType, scope, condition.PropertyName);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"p{paramCounter++}";
 
@@ -96,10 +184,7 @@ public static class WhereClauseBuilder<T>
 
         if (underlyingType.IsEnum)
         {
-            var prop = typeof(T).GetProperty(condition.PropertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-            EnumSerializationFormat format = prop != null
-                ? EnumSerializationAnalyzer.GetPropertyFormat(prop)
-                : EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+            var format = GetEnumFormat(underlyingType, scope, condition.PropertyName);
 
             if (format == EnumSerializationFormat.String)
             {
@@ -126,24 +211,24 @@ public static class WhereClauseBuilder<T>
     /// non-textual. Text-shaped values (strings, GUIDs, dates, string enums) use
     /// <c>json_extract_string</c> so the surrounding JSON quotes are stripped.
     /// </summary>
-    private static string BuildFieldExpression(Type type, string propertyName)
+    private static string BuildFieldExpression(Type type, Scope scope, string propertyName)
     {
-        if (IsTextType(type, propertyName))
+        if (IsTextType(type, scope, propertyName))
         {
-            return $"json_extract_string(document, '$.{propertyName}')";
+            return ExtractString(scope, propertyName);
         }
 
-        var duckType = GetDuckDbType(type, propertyName);
-        return $"CAST(json_extract(document, '$.{propertyName}') AS {duckType})";
+        var duckType = GetDuckDbType(type, scope, propertyName);
+        return $"CAST({Extract(scope, propertyName)} AS {duckType})";
     }
 
-    private static bool IsTextType(Type type, string propertyName)
+    private static bool IsTextType(Type type, Scope scope, string propertyName)
     {
         var underlyingType = Nullable.GetUnderlyingType(type) ?? type;
 
         if (underlyingType.IsEnum)
         {
-            return GetEnumFormat(underlyingType, propertyName) == EnumSerializationFormat.String;
+            return GetEnumFormat(underlyingType, scope, propertyName) == EnumSerializationFormat.String;
         }
 
         return underlyingType == typeof(string)
@@ -152,21 +237,32 @@ public static class WhereClauseBuilder<T>
                || underlyingType == typeof(DateTimeOffset);
     }
 
-    private static EnumSerializationFormat GetEnumFormat(Type underlyingType, string propertyName)
+    /// <summary>
+    /// Resolves the serialization format of an enum field by walking the path from the scope's
+    /// root type, so a property-level converter is honored for nested and element fields too.
+    /// Falls back to the enum type's own default when the path cannot be resolved (e.g. the bare
+    /// element of an enum collection).
+    /// </summary>
+    private static EnumSerializationFormat GetEnumFormat(Type underlyingType, Scope scope, string propertyName)
     {
-        var prop = typeof(T).GetProperty(propertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-        return prop != null
+        if (!underlyingType.IsEnum)
+        {
+            return default;
+        }
+
+        var prop = FieldPath.ResolveProperty(scope.RootType, propertyName);
+        return prop != null && (Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType).IsEnum
             ? EnumSerializationAnalyzer.GetPropertyFormat(prop)
             : EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
     }
 
-    private static string GetDuckDbType(Type type, string propertyName)
+    private static string GetDuckDbType(Type type, Scope scope, string propertyName)
     {
         var underlyingType = Nullable.GetUnderlyingType(type) ?? type;
 
         if (underlyingType.IsEnum)
         {
-            return GetEnumFormat(underlyingType, propertyName) == EnumSerializationFormat.String ? "VARCHAR" : "BIGINT";
+            return GetEnumFormat(underlyingType, scope, propertyName) == EnumSerializationFormat.String ? "VARCHAR" : "BIGINT";
         }
 
         return underlyingType switch
@@ -213,11 +309,11 @@ public static class WhereClauseBuilder<T>
         return op is Operator.IsNull or Operator.IsNotNull;
     }
 
-    private static string BuildNullCondition(string propertyName, Operator op)
+    private static string BuildNullCondition(Scope scope, string propertyName, Operator op)
     {
         // json_extract returns SQL NULL when the path is absent, but the JSON literal 'null' when the
         // path is present with an explicit null value. Both represent a logical null here.
-        var fieldExpression = $"json_extract(document, '$.{propertyName}')";
+        var fieldExpression = Extract(scope, propertyName);
 
         return op switch
         {
@@ -227,9 +323,9 @@ public static class WhereClauseBuilder<T>
         };
     }
 
-    private static string BuildStringNullOrEmptyCondition(string propertyName, Operator op)
+    private static string BuildStringNullOrEmptyCondition(Scope scope, string propertyName, Operator op)
     {
-        var fieldExpression = $"json_extract_string(document, '$.{propertyName}')";
+        var fieldExpression = ExtractString(scope, propertyName);
 
         return op switch
         {
@@ -251,22 +347,21 @@ public static class WhereClauseBuilder<T>
         return op is Operator.CollectionContains or Operator.CollectionNotContains;
     }
 
-    private static string BuildCollectionContainsCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<DuckDBParameter> parameters)
+    private static string BuildCollectionContainsCondition(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter, List<DuckDBParameter> parameters)
     {
         var paramName = $"p{paramCounter++}";
 
         // PropertyType is the collection type (e.g. List<string>, int[]). Derive the element type
         // so the searched value is typed the same way scalar params are typed elsewhere.
-        var elementType = GetCollectionElementType(condition.PropertyType);
+        var elementType = CollectionTypes.GetElementType(condition.PropertyType);
         var underlyingType = Nullable.GetUnderlyingType(elementType) ?? elementType;
 
         object? paramValue = condition.Value;
 
         if (underlyingType.IsEnum)
         {
-            // For enum elements the property lookup uses the leaf segment of the dotted path; the
-            // enum format only depends on the enum type / member converters, so a type-level
-            // fallback gives a correct result for nested array fields as well.
+            // A converter attribute on the collection property does not apply to its elements, so
+            // the element format is the enum type's own default.
             var format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
 
             paramValue = format == EnumSerializationFormat.String
@@ -283,8 +378,9 @@ public static class WhereClauseBuilder<T>
         parameters.Add(new DuckDBParameter(paramName, paramValue ?? DBNull.Value));
 
         var elementSqlType = GetCollectionElementSqlType(underlyingType);
-        var listExpression = $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {elementSqlType}[])";
-        var existsClause = $"(json_extract(document, '$.{condition.PropertyName}') IS NOT NULL AND list_contains({listExpression}, ${paramName}))";
+        var extracted = Extract(scope, condition.PropertyName);
+        var listExpression = $"CAST({extracted} AS {elementSqlType}[])";
+        var existsClause = $"({extracted} IS NOT NULL AND list_contains({listExpression}, ${paramName}))";
 
         return condition.Operator switch
         {
@@ -318,29 +414,6 @@ public static class WhereClauseBuilder<T>
         };
     }
 
-    private static Type GetCollectionElementType(Type collectionType)
-    {
-        if (collectionType.IsArray)
-        {
-            return collectionType.GetElementType()!;
-        }
-
-        if (collectionType.IsGenericType)
-        {
-            return collectionType.GetGenericArguments()[0];
-        }
-
-        var enumerableInterface = collectionType.GetInterfaces()
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
-
-        if (enumerableInterface != null)
-        {
-            return enumerableInterface.GetGenericArguments()[0];
-        }
-
-        throw new NotSupportedException($"Cannot determine element type for collection type {collectionType}");
-    }
-
     private static bool IsStringOperator(Operator op)
     {
         return op is Operator.Contains or Operator.NotContains or
@@ -351,21 +424,21 @@ public static class WhereClauseBuilder<T>
                      Operator.EndsWithIgnoreCase or Operator.NotEndsWithIgnoreCase;
     }
 
-    private static string BuildSetCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<DuckDBParameter> parameters)
+    private static string BuildSetCondition(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter, List<DuckDBParameter> parameters)
     {
-        var fieldExpression = BuildFieldExpression(condition.PropertyType, condition.PropertyName);
+        var fieldExpression = BuildFieldExpression(condition.PropertyType, scope, condition.PropertyName);
 
         return condition.Operator switch
         {
-            Operator.In => BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName),
-            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName)})",
+            Operator.In => BuildInCondition(fieldExpression, condition.Value, scope, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName),
+            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, scope, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName)})",
             _ => throw new NotSupportedException($"Set operator {condition.Operator} is not supported")
         };
     }
 
-    private static string BuildStringCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<DuckDBParameter> parameters)
+    private static string BuildStringCondition(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter, List<DuckDBParameter> parameters)
     {
-        var fieldExpression = $"json_extract_string(document, '$.{condition.PropertyName}')";
+        var fieldExpression = ExtractString(scope, condition.PropertyName);
 
         return condition.Operator switch
         {
@@ -405,7 +478,7 @@ public static class WhereClauseBuilder<T>
             .Replace("_", "\\_");
     }
 
-    private static string BuildInCondition(string fieldExpression, object? value, ref int paramCounter, List<DuckDBParameter> parameters, Type? propertyType = null, string? propertyName = null)
+    private static string BuildInCondition(string fieldExpression, object? value, Scope scope, ref int paramCounter, List<DuckDBParameter> parameters, Type? propertyType = null, string? propertyName = null)
     {
         if (value is System.Collections.IEnumerable enumerable and not string)
         {
@@ -430,10 +503,7 @@ public static class WhereClauseBuilder<T>
 
                 if (underlyingType != null && underlyingType.IsEnum)
                 {
-                    var prop = typeof(T).GetProperty(propertyName ?? string.Empty, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-                    EnumSerializationFormat format = prop != null
-                        ? EnumSerializationAnalyzer.GetPropertyFormat(prop)
-                        : EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+                    var format = GetEnumFormat(underlyingType, scope, propertyName ?? string.Empty);
 
                     paramValue = format == EnumSerializationFormat.String
                         ? item?.ToString()

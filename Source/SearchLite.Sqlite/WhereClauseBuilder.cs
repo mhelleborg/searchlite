@@ -10,6 +10,26 @@ public record Clause
 
 public static class WhereClauseBuilder<T>
 {
+    /// <summary>
+    /// The JSON value that field paths are resolved against. At the top level this is the
+    /// <c>document</c> column of type <typeparamref name="T"/>; inside a collection predicate it is
+    /// the <c>value</c> column of the <c>json_each</c> row for the current element.
+    /// </summary>
+    private sealed record Scope(string Root, Type RootType, int Depth)
+    {
+        public static readonly Scope Document = new("document", typeof(T), 0);
+
+        /// <summary>
+        /// Creates the scope for the elements of a collection at this level, returning the alias
+        /// the enclosing <c>json_each</c> must be given.
+        /// </summary>
+        public (string alias, Scope inner) Nested(Type elementType)
+        {
+            var alias = $"e{Depth}";
+            return (alias, new Scope($"{alias}.value", elementType, Depth + 1));
+        }
+    }
+
     public static IReadOnlyList<Clause> BuildClauses(List<FilterNode<T>> filters)
     {
         var globalParamCounter = 0;
@@ -19,7 +39,7 @@ public static class WhereClauseBuilder<T>
     private static Clause BuildClause(FilterNode<T> filter, ref int globalParamCounter)
     {
         var parameters = new List<SqliteParameter>();
-        var sql = BuildSql(filter, ref globalParamCounter, parameters);
+        var sql = BuildSql(filter, Scope.Document, ref globalParamCounter, parameters);
         return new Clause
         {
             Sql = sql,
@@ -27,17 +47,20 @@ public static class WhereClauseBuilder<T>
         };
     }
 
-    private static string BuildSql(FilterNode<T> node, ref int paramCounter, List<SqliteParameter> parameters)
+    private static string BuildSql(FilterNode<T> node, Scope scope, ref int paramCounter, List<SqliteParameter> parameters)
     {
         return node switch
         {
-            FilterNode<T>.Condition condition => BuildConditionSql(condition, ref paramCounter, parameters),
-            FilterNode<T>.Group group => BuildGroupSql(group, ref paramCounter, parameters),
+            FilterNode<T>.Condition condition => BuildConditionSql(condition, scope, ref paramCounter, parameters),
+            FilterNode<T>.Group group => BuildGroupSql(group, scope, ref paramCounter, parameters),
+            FilterNode<T>.Not not => $"NOT ({BuildSql(not.Operand, scope, ref paramCounter, parameters)})",
+            FilterNode<T>.Quantifier quantifier => BuildQuantifierSql(quantifier, scope, ref paramCounter, parameters),
+            FilterNode<T>.CollectionCount count => BuildCollectionCountSql(count, scope, ref paramCounter, parameters),
             _ => throw new ArgumentException($"Unsupported node type: {node.GetType()}")
         };
     }
 
-    private static string BuildGroupSql(FilterNode<T>.Group group, ref int paramCounter,
+    private static string BuildGroupSql(FilterNode<T>.Group group, Scope scope, ref int paramCounter,
         List<SqliteParameter> parameters)
     {
         var op = group.Operator switch
@@ -51,43 +74,122 @@ public static class WhereClauseBuilder<T>
 
         foreach (var condition in group.Conditions)
         {
-            conditions.Add(BuildSql(condition, ref paramCounter, parameters));
+            conditions.Add(BuildSql(condition, scope, ref paramCounter, parameters));
+        }
+
+        if (conditions.Count == 0)
+        {
+            // Sqlite uses 1 for TRUE and 0 for FALSE.
+            return group.Operator == LogicalOperator.And ? "1" : "0";
         }
 
         return conditions.Count > 1
             ? $"({string.Join(op, conditions)})"
-            : conditions.FirstOrDefault() ?? "1"; // Sqlite uses 1 for TRUE
+            : conditions[0];
     }
 
-    private static string BuildConditionSql(FilterNode<T>.Condition condition, ref int paramCounter,
+    /// <summary>
+    /// JSON path for a dotted property path: "$" for the scope root itself, "$.a.b" otherwise.
+    /// </summary>
+    private static string JsonPath(string propertyName) =>
+        propertyName.Length == 0 ? "$" : $"$.{propertyName}";
+
+    /// <summary>
+    /// The extracted (untyped) JSON scalar at the given path. The bare element of a scalar
+    /// collection is already a SQL value in <c>json_each</c>'s <c>value</c> column, so it is
+    /// used directly rather than re-parsed.
+    /// </summary>
+    private static string Extract(Scope scope, string propertyName)
+    {
+        if (propertyName.Length == 0 && scope.Depth > 0)
+        {
+            return scope.Root;
+        }
+
+        return $"json_extract({scope.Root}, '{JsonPath(propertyName)}')";
+    }
+
+    /// <summary>
+    /// A <c>json_each</c> source over the array at the given path that yields no rows when the
+    /// value is missing, null or not an array (a bare <c>json_each</c> on a JSON null yields one
+    /// null row).
+    /// </summary>
+    private static string ArraySource(Scope scope, string propertyName)
+    {
+        var path = JsonPath(propertyName);
+        return $"json_each(CASE WHEN json_type({scope.Root}, '{path}') = 'array' THEN json_extract({scope.Root}, '{path}') ELSE '[]' END)";
+    }
+
+    private static string BuildQuantifierSql(FilterNode<T>.Quantifier quantifier, Scope scope, ref int paramCounter,
+        List<SqliteParameter> parameters)
+    {
+        var (alias, inner) = scope.Nested(quantifier.ElementType);
+        var source = $"{ArraySource(scope, quantifier.PropertyName)} AS {alias}";
+
+        if (quantifier.Predicate == null)
+        {
+            return quantifier.Kind == QuantifierKind.Any
+                ? $"EXISTS (SELECT 1 FROM {source})"
+                : throw new NotSupportedException("All requires a predicate");
+        }
+
+        var predicate = BuildSql(quantifier.Predicate, inner, ref paramCounter, parameters);
+
+        return quantifier.Kind == QuantifierKind.Any
+            ? $"EXISTS (SELECT 1 FROM {source} WHERE {predicate})"
+            : $"NOT EXISTS (SELECT 1 FROM {source} WHERE NOT ({predicate}))";
+    }
+
+    private static string BuildCollectionCountSql(FilterNode<T>.CollectionCount count, Scope scope, ref int paramCounter,
+        List<SqliteParameter> parameters)
+    {
+        string countExpression;
+        if (count.Predicate == null)
+        {
+            // json_array_length is 0 for non-arrays and NULL for a missing path.
+            countExpression = $"COALESCE(json_array_length({scope.Root}, '{JsonPath(count.PropertyName)}'), 0)";
+        }
+        else
+        {
+            var (alias, inner) = scope.Nested(count.ElementType);
+            var predicate = BuildSql(count.Predicate, inner, ref paramCounter, parameters);
+            countExpression = $"(SELECT COUNT(*) FROM {ArraySource(scope, count.PropertyName)} AS {alias} WHERE {predicate})";
+        }
+
+        var paramName = $"@p{paramCounter++}";
+        parameters.Add(new SqliteParameter(paramName, count.Value));
+        return $"{countExpression} {GetOperatorString(count.Operator)} {paramName}";
+    }
+
+    private static string BuildConditionSql(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter,
         List<SqliteParameter> parameters)
     {
         if (IsNullOperator(condition.Operator))
         {
-            return BuildNullCondition(condition.PropertyName, condition.Operator);
+            return BuildNullCondition(scope, condition.PropertyName, condition.Operator);
         }
 
         if (IsStringNullOrEmptyOperator(condition.Operator))
         {
-            return BuildStringNullOrEmptyCondition(condition.PropertyName, condition.Operator);
+            return BuildStringNullOrEmptyCondition(scope, condition.PropertyName, condition.Operator);
         }
 
         if (IsCollectionContainsOperator(condition.Operator))
         {
-            return BuildCollectionContainsCondition(condition, ref paramCounter, parameters);
+            return BuildCollectionContainsCondition(condition, scope, ref paramCounter, parameters);
         }
 
         if (IsSetOperator(condition.Operator))
         {
-            return BuildSetCondition(condition, ref paramCounter, parameters);
+            return BuildSetCondition(condition, scope, ref paramCounter, parameters);
         }
 
         if (IsStringOperator(condition.Operator))
         {
-            return BuildStringCondition(condition, ref paramCounter, parameters);
+            return BuildStringCondition(condition, scope, ref paramCounter, parameters);
         }
 
-        var sqliteType = GetSqliteType(condition.PropertyType, condition.PropertyName);
+        var sqliteType = GetSqliteType(condition.PropertyType, scope, condition.PropertyName);
         var operatorString = GetOperatorString(condition.Operator);
         var paramName = $"@p{paramCounter++}";
 
@@ -96,17 +198,8 @@ public static class WhereClauseBuilder<T>
 
         if (underlyingType.IsEnum)
         {
-            var prop = typeof(T).GetProperty(condition.PropertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-            EnumSerializationFormat format;
-            if (prop != null)
-            {
-                format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
-            }
-            else
-            {
-                format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
-            }
-            
+            var format = ResolveEnumFormat(scope, condition.PropertyName, underlyingType);
+
             if (format == EnumSerializationFormat.String)
             {
                 paramValue = condition.Value?.ToString();
@@ -124,26 +217,35 @@ public static class WhereClauseBuilder<T>
 
         parameters.Add(new SqliteParameter(paramName, paramValue ?? DBNull.Value));
 
-        return $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {sqliteType}) {operatorString} {paramName}";
+        return $"CAST({Extract(scope, condition.PropertyName)} AS {sqliteType}) {operatorString} {paramName}";
     }
 
-    private static string GetSqliteType(Type type, string propertyName)
+    /// <summary>
+    /// Resolves the serialization format of an enum field by walking the path from the scope's
+    /// root type, so a property-level converter is honored for nested and element fields too.
+    /// Falls back to the enum type's own default when the path cannot be resolved (e.g. the bare
+    /// element of an enum collection).
+    /// </summary>
+    private static EnumSerializationFormat ResolveEnumFormat(Scope scope, string propertyName, Type underlyingType)
+    {
+        if (!underlyingType.IsEnum)
+        {
+            return default;
+        }
+
+        var prop = FieldPath.ResolveProperty(scope.RootType, propertyName);
+        return prop != null && (Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType).IsEnum
+            ? EnumSerializationAnalyzer.GetPropertyFormat(prop)
+            : EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+    }
+
+    private static string GetSqliteType(Type type, Scope scope, string propertyName)
     {
         var underlyingType = Nullable.GetUnderlyingType(type) ?? type;
 
         if (underlyingType.IsEnum)
         {
-            var prop = typeof(T).GetProperty(propertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-            EnumSerializationFormat format;
-            if (prop != null)
-            {
-                format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
-            }
-            else
-            {
-                format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
-            }
-            
+            var format = ResolveEnumFormat(scope, propertyName, underlyingType);
             return format == EnumSerializationFormat.String ? "TEXT" : "INTEGER";
         }
 
@@ -191,9 +293,9 @@ public static class WhereClauseBuilder<T>
         return op is Operator.IsNull or Operator.IsNotNull;
     }
 
-    private static string BuildNullCondition(string propertyName, Operator op)
+    private static string BuildNullCondition(Scope scope, string propertyName, Operator op)
     {
-        var fieldExpression = $"json_extract(document, '$.{propertyName}')";
+        var fieldExpression = Extract(scope, propertyName);
 
         return op switch
         {
@@ -203,9 +305,9 @@ public static class WhereClauseBuilder<T>
         };
     }
 
-    private static string BuildStringNullOrEmptyCondition(string propertyName, Operator op)
+    private static string BuildStringNullOrEmptyCondition(Scope scope, string propertyName, Operator op)
     {
-        var fieldExpression = $"CAST(json_extract(document, '$.{propertyName}') AS TEXT)";
+        var fieldExpression = $"CAST({Extract(scope, propertyName)} AS TEXT)";
 
         return op switch
         {
@@ -227,22 +329,21 @@ public static class WhereClauseBuilder<T>
         return op is Operator.CollectionContains or Operator.CollectionNotContains;
     }
 
-    private static string BuildCollectionContainsCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
+    private static string BuildCollectionContainsCondition(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter, List<SqliteParameter> parameters)
     {
         var paramName = $"@p{paramCounter++}";
 
         // PropertyType is the collection type (e.g. List<string>, int[]). Derive the element type
         // so the searched value is typed the same way scalar params are typed elsewhere.
-        var elementType = GetCollectionElementType(condition.PropertyType);
+        var elementType = CollectionTypes.GetElementType(condition.PropertyType);
         var underlyingType = Nullable.GetUnderlyingType(elementType) ?? elementType;
 
         object? paramValue = condition.Value;
 
         if (underlyingType.IsEnum)
         {
-            // For enum elements the property lookup uses the leaf segment of the dotted path; the
-            // enum format only depends on the enum type / member converters, so a type-level
-            // fallback gives a correct result for nested array fields as well.
+            // A converter attribute on the collection property does not apply to its elements, so
+            // the element format is the enum type's own default.
             var format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
 
             if (format == EnumSerializationFormat.String)
@@ -262,7 +363,8 @@ public static class WhereClauseBuilder<T>
 
         parameters.Add(new SqliteParameter(paramName, paramValue ?? DBNull.Value));
 
-        var existsClause = $"EXISTS (SELECT 1 FROM json_each(document, '$.{condition.PropertyName}') WHERE value = {paramName})";
+        var (alias, _) = scope.Nested(elementType);
+        var existsClause = $"EXISTS (SELECT 1 FROM json_each({scope.Root}, '{JsonPath(condition.PropertyName)}') AS {alias} WHERE {alias}.value = {paramName})";
 
         return condition.Operator switch
         {
@@ -270,29 +372,6 @@ public static class WhereClauseBuilder<T>
             Operator.CollectionNotContains => $"NOT {existsClause}",
             _ => throw new NotSupportedException($"Collection operator {condition.Operator} is not supported")
         };
-    }
-
-    private static Type GetCollectionElementType(Type collectionType)
-    {
-        if (collectionType.IsArray)
-        {
-            return collectionType.GetElementType()!;
-        }
-
-        if (collectionType.IsGenericType)
-        {
-            return collectionType.GetGenericArguments()[0];
-        }
-
-        var enumerableInterface = collectionType.GetInterfaces()
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
-
-        if (enumerableInterface != null)
-        {
-            return enumerableInterface.GetGenericArguments()[0];
-        }
-
-        throw new NotSupportedException($"Cannot determine element type for collection type {collectionType}");
     }
 
     private static bool IsStringOperator(Operator op)
@@ -305,21 +384,21 @@ public static class WhereClauseBuilder<T>
                      Operator.EndsWithIgnoreCase or Operator.NotEndsWithIgnoreCase;
     }
 
-    private static string BuildSetCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
+    private static string BuildSetCondition(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter, List<SqliteParameter> parameters)
     {
-        var fieldExpression = $"CAST(json_extract(document, '$.{condition.PropertyName}') AS {GetSqliteType(condition.PropertyType, condition.PropertyName)})";
+        var fieldExpression = $"CAST({Extract(scope, condition.PropertyName)} AS {GetSqliteType(condition.PropertyType, scope, condition.PropertyName)})";
 
         return condition.Operator switch
         {
-            Operator.In => BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName),
-            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName)})",
+            Operator.In => BuildInCondition(fieldExpression, condition.Value, scope, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName),
+            Operator.NotIn => $"NOT ({BuildInCondition(fieldExpression, condition.Value, scope, ref paramCounter, parameters, condition.PropertyType, condition.PropertyName)})",
             _ => throw new NotSupportedException($"Set operator {condition.Operator} is not supported")
         };
     }
 
-    private static string BuildStringCondition(FilterNode<T>.Condition condition, ref int paramCounter, List<SqliteParameter> parameters)
+    private static string BuildStringCondition(FilterNode<T>.Condition condition, Scope scope, ref int paramCounter, List<SqliteParameter> parameters)
     {
-        var fieldExpression = $"CAST(json_extract(document, '$.{condition.PropertyName}') AS TEXT)";
+        var fieldExpression = $"CAST({Extract(scope, condition.PropertyName)} AS TEXT)";
 
         return condition.Operator switch
         {
@@ -346,7 +425,7 @@ public static class WhereClauseBuilder<T>
         return $"{fieldExpression} GLOB {paramName}";
     }
 
-    private static string BuildInCondition(string fieldExpression, object? value, ref int paramCounter, List<SqliteParameter> parameters, Type? propertyType = null, string? propertyName = null)
+    private static string BuildInCondition(string fieldExpression, object? value, Scope scope, ref int paramCounter, List<SqliteParameter> parameters, Type? propertyType = null, string? propertyName = null)
     {
         if (value is System.Collections.IEnumerable enumerable and not string)
         {
@@ -371,17 +450,8 @@ public static class WhereClauseBuilder<T>
 
                 if (underlyingType != null && underlyingType.IsEnum)
                 {
-                    var prop = typeof(T).GetProperty(propertyName ?? string.Empty, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.IgnoreCase);
-                    EnumSerializationFormat format;
-                    if (prop != null)
-                    {
-                        format = EnumSerializationAnalyzer.GetPropertyFormat(prop);
-                    }
-                    else
-                    {
-                        format = EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
-                    }
-                    
+                    var format = ResolveEnumFormat(scope, propertyName ?? string.Empty, underlyingType);
+
                     if (format == EnumSerializationFormat.String)
                     {
                         paramValue = item?.ToString();

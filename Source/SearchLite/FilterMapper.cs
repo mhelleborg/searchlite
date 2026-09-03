@@ -1,4 +1,5 @@
-﻿using System.Linq.Expressions;
+using System.Collections;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace SearchLite;
@@ -11,79 +12,205 @@ public static class FilterMapper
     /// <param name="predicate"></param>
     /// <typeparam name="T"></typeparam>
     public static FilterNode<T> Map<T>(Expression<Func<T, bool>> predicate)
-    { 
-        var visitor = new FilterExpressionVisitor<T>();
-        visitor.Visit(predicate);
-        return visitor.Result ?? throw new InvalidOperationException("Failed to map expression");
+    {
+        var visitor = new FilterExpressionVisitor<T>(predicate.Parameters[0]);
+        return visitor.VisitExpression(predicate.Body);
     }
 
-    class FilterExpressionVisitor<T> : ExpressionVisitor
+    /// <summary>
+    /// A document field referenced by a filter expression: its dot-separated path relative to
+    /// the current scope root (empty for the root itself), its CLR type, and the leaf
+    /// <see cref="PropertyInfo"/> when the path ends in a property.
+    /// </summary>
+    private readonly record struct FieldRef(string Path, Type Type, PropertyInfo? Property);
+
+    /// <summary>
+    /// A <c>Count</c>/<c>Length</c> access on a collection field, with the optional element
+    /// predicate of <c>Enumerable.Count(source, predicate)</c>.
+    /// </summary>
+    private readonly record struct CountRef(FieldRef Collection, LambdaExpression? Predicate);
+
+    /// <summary>
+    /// Translates the body of one lambda. The lambda parameter is the scope root: for the
+    /// top-level predicate it is the document, inside a collection predicate it is the element.
+    /// </summary>
+    private sealed class FilterExpressionVisitor<T>
     {
-        public FilterNode<T>? Result { get; private set; }
+        private readonly ParameterExpression _parameter;
 
-        protected override Expression VisitLambda<TDelegate>(Expression<TDelegate> node)
+        public FilterExpressionVisitor(ParameterExpression parameter)
         {
-            Result = VisitExpression(node.Body);
-            return node;
+            _parameter = parameter;
         }
 
-        private FilterNode<T> VisitExpression(Expression expression)
+        public FilterNode<T> VisitExpression(Expression expression)
         {
-            return expression switch
+            switch (expression)
             {
-                BinaryExpression { NodeType: ExpressionType.AndAlso or ExpressionType.OrElse } binary => 
-                    VisitLogicalBinary(binary),
-                BinaryExpression binary when IsComparisonOperator(binary.NodeType) => 
-                    VisitComparisonBinary(binary),
-                MemberExpression member when member.Type == typeof(bool) =>
-                    VisitBooleanMember(member), 
-                UnaryExpression { NodeType: ExpressionType.Not, Operand: MemberExpression member } when member.Type == typeof(bool) =>
-                    VisitNegatedBooleanMember(member),
-                MethodCallExpression method when IsStringNullOrEmptyMethod(method) =>
-                    VisitStringNullOrEmptyMethod(method),
-                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringNullOrEmptyMethod(method) =>
-                    VisitNegatedStringNullOrEmptyMethod(method),
-                MethodCallExpression method when IsSetOperatorMethod(method) =>
-                    VisitSetOperatorMethod(method),
-                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsSetOperatorMethod(method) =>
-                    VisitNegatedSetOperatorMethod(method),
-                MethodCallExpression method when IsStringOperatorMethod(method) =>
-                    VisitStringOperatorMethod(method),
-                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsStringOperatorMethod(method) =>
-                    VisitNegatedStringOperatorMethod(method),
-                MethodCallExpression method when IsComparisonMethod(method) =>
-                    VisitComparisonMethod(method),
-                UnaryExpression { NodeType: ExpressionType.Not, Operand: MethodCallExpression method } when IsComparisonMethod(method) =>
-                    VisitNegatedComparisonMethod(method),
-                ConstantExpression { Value: true } => 
-                    new FilterNode<T>.Group { Operator = LogicalOperator.And, Conditions = new List<FilterNode<T>>() },
-                _ => throw new NotSupportedException($"Expression type {expression.NodeType} is not supported")
+                case BinaryExpression { NodeType: ExpressionType.AndAlso or ExpressionType.OrElse } logical:
+                    return VisitLogicalBinary(logical);
+                case BinaryExpression binary when IsComparisonOperator(binary.NodeType):
+                    return VisitComparisonBinary(binary);
+                case UnaryExpression { NodeType: ExpressionType.Not } not:
+                    return VisitNot(not.Operand);
+                case ConstantExpression { Value: bool constant }:
+                    return ConstantNode(constant);
+            }
+
+            if (TryVisitBoolean(expression, negated: false, out var boolean))
+            {
+                return boolean;
+            }
+
+            if (expression is MethodCallExpression method)
+            {
+                return VisitMethodCall(method);
+            }
+
+            // A boolean expression that does not touch the document at all (e.g. a captured flag
+            // in `d => includeAll || d.Views > 10`) is evaluated once and folded to a constant.
+            if (expression.Type == typeof(bool) && !ReferencesParameter(expression))
+            {
+                return ConstantNode((bool)Evaluate(expression)!);
+            }
+
+            throw new NotSupportedException($"Expression type {expression.NodeType} is not supported");
+        }
+
+        private FilterNode<T> VisitMethodCall(MethodCallExpression method)
+        {
+            if (IsStringNullOrEmptyMethod(method))
+            {
+                return VisitStringNullOrEmptyMethod(method);
+            }
+
+            if (IsQuantifierMethod(method))
+            {
+                return VisitQuantifierMethod(method);
+            }
+
+            if (IsSetOperatorMethod(method))
+            {
+                return VisitSetOperatorMethod(method);
+            }
+
+            if (IsStringOperatorMethod(method))
+            {
+                return VisitStringOperatorMethod(method);
+            }
+
+            if (IsComparisonMethod(method))
+            {
+                return VisitComparisonMethod(method);
+            }
+
+            throw new NotSupportedException($"Method {method.Method.Name} is not supported in filter expressions");
+        }
+
+        /// <summary>
+        /// Boolean-valued field access: <c>d.Flag</c>, <c>d.Nullable.HasValue</c>, and the bare
+        /// element parameter of a predicate over a boolean collection (<c>d.Flags.Any(f =&gt; f)</c>).
+        /// </summary>
+        private bool TryVisitBoolean(Expression expression, bool negated, out FilterNode<T> node)
+        {
+            node = null!;
+
+            if (expression is MemberExpression { Member.Name: nameof(Nullable<int>.HasValue) } hasValue
+                && hasValue.Expression != null
+                && Nullable.GetUnderlyingType(hasValue.Expression.Type) != null
+                && TryGetField(hasValue.Expression, out var nullableField))
+            {
+                node = new FilterNode<T>.Condition
+                {
+                    PropertyName = nullableField.Path,
+                    PropertyType = nullableField.Type,
+                    Operator = negated ? Operator.IsNull : Operator.IsNotNull,
+                    Value = true
+                };
+                return true;
+            }
+
+            if (expression.Type == typeof(bool)
+                && expression is MemberExpression or ParameterExpression
+                && TryGetField(expression, out var field))
+            {
+                node = new FilterNode<T>.Condition
+                {
+                    PropertyName = field.Path,
+                    PropertyType = field.Type,
+                    Operator = Operator.Equal,
+                    Value = !negated
+                };
+                return true;
+            }
+
+            return false;
+        }
+
+        private FilterNode<T> VisitNot(Expression operand)
+        {
+            if (TryVisitBoolean(operand, negated: true, out var boolean))
+            {
+                return boolean;
+            }
+
+            return Negate(VisitExpression(operand));
+        }
+
+        /// <summary>
+        /// Negates a mapped node. Conditions and counts are negated by inverting the operator;
+        /// everything else is wrapped in a <see cref="FilterNode{T}.Not"/> node.
+        /// </summary>
+        private static FilterNode<T> Negate(FilterNode<T> node)
+        {
+            return node switch
+            {
+                FilterNode<T>.Condition condition => condition with { Operator = InvertOperator(condition.Operator) },
+                FilterNode<T>.CollectionCount count => count with { Operator = InvertOperator(count.Operator) },
+                FilterNode<T>.Not not => not.Operand,
+                _ => new FilterNode<T>.Not { Operand = node }
             };
         }
 
-        private FilterNode<T> VisitBooleanMember(MemberExpression member)
+        private static Operator InvertOperator(Operator op) => op switch
         {
-            var propertyInfo = (PropertyInfo)member.Member;
-            return new FilterNode<T>.Condition
-            {
-                PropertyName = FieldPath.From(member),
-                PropertyType = propertyInfo.PropertyType!,
-                Operator = Operator.Equal,
-                Value = true
-            };
-        }
+            Operator.Equal => Operator.NotEqual,
+            Operator.NotEqual => Operator.Equal,
+            Operator.GreaterThan => Operator.LessThanOrEqual,
+            Operator.GreaterThanOrEqual => Operator.LessThan,
+            Operator.LessThan => Operator.GreaterThanOrEqual,
+            Operator.LessThanOrEqual => Operator.GreaterThan,
+            Operator.IsNullOrEmpty => Operator.IsNotNullOrEmpty,
+            Operator.IsNotNullOrEmpty => Operator.IsNullOrEmpty,
+            Operator.IsNullOrWhiteSpace => Operator.IsNotNullOrWhiteSpace,
+            Operator.IsNotNullOrWhiteSpace => Operator.IsNullOrWhiteSpace,
+            Operator.IsNull => Operator.IsNotNull,
+            Operator.IsNotNull => Operator.IsNull,
+            Operator.Contains => Operator.NotContains,
+            Operator.NotContains => Operator.Contains,
+            Operator.ContainsIgnoreCase => Operator.NotContainsIgnoreCase,
+            Operator.NotContainsIgnoreCase => Operator.ContainsIgnoreCase,
+            Operator.StartsWith => Operator.NotStartsWith,
+            Operator.NotStartsWith => Operator.StartsWith,
+            Operator.StartsWithIgnoreCase => Operator.NotStartsWithIgnoreCase,
+            Operator.NotStartsWithIgnoreCase => Operator.StartsWithIgnoreCase,
+            Operator.EndsWith => Operator.NotEndsWith,
+            Operator.NotEndsWith => Operator.EndsWith,
+            Operator.EndsWithIgnoreCase => Operator.NotEndsWithIgnoreCase,
+            Operator.NotEndsWithIgnoreCase => Operator.EndsWithIgnoreCase,
+            Operator.In => Operator.NotIn,
+            Operator.NotIn => Operator.In,
+            Operator.CollectionContains => Operator.CollectionNotContains,
+            Operator.CollectionNotContains => Operator.CollectionContains,
+            _ => throw new NotSupportedException($"Cannot negate operator {op}")
+        };
 
-        private FilterNode<T> VisitNegatedBooleanMember(MemberExpression member)
+        private static FilterNode<T> ConstantNode(bool value) => new FilterNode<T>.Group
         {
-            var propertyInfo = (PropertyInfo)member.Member;
-            return new FilterNode<T>.Condition
-            {
-                PropertyName = FieldPath.From(member),
-                PropertyType = propertyInfo.PropertyType!,
-                Operator = Operator.Equal,
-                Value = false
-            };
-        }
+            // An empty AND group is always true, an empty OR group is always false.
+            Operator = value ? LogicalOperator.And : LogicalOperator.Or,
+            Conditions = []
+        };
 
         private FilterNode<T> VisitLogicalBinary(BinaryExpression node)
         {
@@ -99,46 +226,45 @@ public static class FilterMapper
 
         private FilterNode<T> VisitComparisonBinary(BinaryExpression node)
         {
+            // Collection size: d.Tags.Count > 0, d.Scores.Length == 2, d.Items.Count(i => ...) >= 1
+            if (TryGetCollectionCount(node.Left, out var count))
+            {
+                return BuildCollectionCount(count, GetOperator(node.NodeType), node.Right);
+            }
+
+            if (TryGetCollectionCount(node.Right, out count))
+            {
+                return BuildCollectionCount(count, GetOperator(node.NodeType, flipComparison: true), node.Left);
+            }
+
+            if (IsMethodCallWithResult(node.Right) && !IsMethodCallWithResult(node.Left))
+            {
+                // 0 < x.Name.CompareTo("a")  =>  x.Name.CompareTo("a") > 0
+                node = Expression.MakeBinary(FlipComparison(node.NodeType), node.Right, node.Left);
+            }
+
             if (IsMethodCallWithResult(node.Left))
             {
                 return VisitMethodCallComparison(node);
             }
 
-            var (memberExpression, isLeftSide) = GetMemberExpression(node);
-            if (memberExpression == null)
+            var (field, isLeftSide) = GetField(node);
+            if (field == null)
             {
-                CheckForUnsupportedOperations(node.Left);
-                throw new NotSupportedException($"Unable to extract member from expression");
-            }
-
-            var propertyInfo = (PropertyInfo)memberExpression.Member;
-            // Extract value from the opposite side of where the member expression is
-            var valueExpression = isLeftSide ? node.Right : node.Left;
-            var value = Expression.Lambda(valueExpression).Compile().DynamicInvoke();
-
-            // Handle enum serialization based on the property's type (not the value's type)
-            if (value != null)
-            {
-                var propertyType = propertyInfo.PropertyType;
-                var underlyingPropertyType = propertyType != null ? (Nullable.GetUnderlyingType(propertyType) ?? propertyType) : null;
-                
-                if (underlyingPropertyType != null && underlyingPropertyType.IsEnum)
+                // `boolExpression == true/false` where the left side is not a plain field access
+                // (e.g. d.Items.Any(...) == false): map the boolean expression and negate as needed.
+                if (TryVisitBooleanComparison(node, out var booleanComparison))
                 {
-                    var format = EnumSerializationAnalyzer.GetPropertyFormat(propertyInfo);
-                    
-                    if (format == EnumSerializationFormat.String)
-                    {
-                        // Convert the integer value to enum then to string
-                        var enumValue = Enum.ToObject(underlyingPropertyType, value);
-                        value = enumValue.ToString();
-                    }
-                    else
-                    {
-                        // Keep as integer (ensure it's the right integer type)
-                        value = Convert.ChangeType(value, underlyingPropertyType.GetEnumUnderlyingType());
-                    }
+                    return booleanComparison;
                 }
+
+                CheckForUnsupportedOperations(node.Left);
+                throw new NotSupportedException($"Unable to extract a document field from expression '{node}'");
             }
+
+            // Extract value from the opposite side of where the field is
+            var valueExpression = isLeftSide ? node.Right : node.Left;
+            var value = NormalizeEnumValue(Evaluate(valueExpression), field.Value);
 
             // Handle null comparisons specially
             if (value == null)
@@ -152,73 +278,84 @@ public static class FilterMapper
 
                 return new FilterNode<T>.Condition
                 {
-                    PropertyName = FieldPath.From(memberExpression),
-                    PropertyType = propertyInfo.PropertyType!,
+                    PropertyName = field.Value.Path,
+                    PropertyType = field.Value.Type,
                     Operator = nullOperator,
                     Value = true // Use true as a placeholder since we don't need the actual value for null checks
                 };
             }
 
-            // When member is on the right side and constant on left, we need to flip comparison operators
+            // When the field is on the right side and the constant on the left, we need to flip comparison operators
             var operatorType = GetOperator(node.NodeType, !isLeftSide);
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = FieldPath.From(memberExpression),
-                PropertyType = propertyInfo.PropertyType!,
+                PropertyName = field.Value.Path,
+                PropertyType = field.Value.Type,
                 Operator = operatorType,
-                Value = value!
+                Value = value
             };
+        }
+
+        private bool TryVisitBooleanComparison(BinaryExpression node, out FilterNode<T> result)
+        {
+            result = null!;
+            if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual)
+                || node.Left.Type != typeof(bool))
+            {
+                return false;
+            }
+
+            Expression? booleanSide = null;
+            bool constant;
+            if (!ReferencesParameter(node.Right) && Evaluate(node.Right) is bool rightConstant)
+            {
+                booleanSide = node.Left;
+                constant = rightConstant;
+            }
+            else if (!ReferencesParameter(node.Left) && Evaluate(node.Left) is bool leftConstant)
+            {
+                booleanSide = node.Right;
+                constant = leftConstant;
+            }
+            else
+            {
+                return false;
+            }
+
+            var mapped = VisitExpression(booleanSide);
+            var negate = constant == (node.NodeType == ExpressionType.NotEqual);
+            result = negate ? Negate(mapped) : mapped;
+            return true;
         }
 
         private FilterNode<T> VisitMethodCallComparison(BinaryExpression node)
         {
             var methodCall = (MethodCallExpression)node.Left;
-            
-            if (methodCall.Object is not MemberExpression memberExpression)
+
+            if (!TryGetField(methodCall.Object, out var field))
             {
                 throw new NotSupportedException($"{methodCall.Method.Name} method must be called on a property");
             }
 
-            var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var comparisonResult = Expression.Lambda(node.Right).Compile().DynamicInvoke();
+            var comparisonResult = Evaluate(node.Right);
 
             return methodCall.Method.Name switch
             {
-                nameof(IComparable.CompareTo) or "CompareTo" => HandleCompareToComparison(methodCall, memberExpression, propertyInfo, node.NodeType, comparisonResult),
-                nameof(object.ToString) => HandleToStringComparison(memberExpression, propertyInfo, node.NodeType, comparisonResult),
+                nameof(IComparable.CompareTo) => HandleCompareToComparison(methodCall, field, node.NodeType, comparisonResult),
+                nameof(object.ToString) => HandleToStringComparison(field, node.NodeType, comparisonResult),
                 _ => throw new NotSupportedException($"Method {methodCall.Method.Name} is not supported in binary comparisons")
             };
         }
 
-        private FilterNode<T> HandleCompareToComparison(MethodCallExpression methodCall, MemberExpression memberExpression, PropertyInfo propertyInfo,
+        private FilterNode<T> HandleCompareToComparison(MethodCallExpression methodCall, FieldRef field,
             ExpressionType nodeType, object? comparisonResult)
         {
-            var compareValue = Expression.Lambda(methodCall.Arguments[0]).Compile().DynamicInvoke();
-
-            // Handle enum serialization based on the property's serialization format
-            if (compareValue != null)
-            {
-                var valueType = compareValue.GetType();
-                var underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
-                
-                if (underlyingType.IsEnum)
-                {
-                    var format = EnumSerializationAnalyzer.GetPropertyFormat(propertyInfo);
-                    if (format == EnumSerializationFormat.String)
-                    {
-                        compareValue = compareValue.ToString();
-                    }
-                    else
-                    {
-                        compareValue = Convert.ChangeType(compareValue, underlyingType.GetEnumUnderlyingType());
-                    }
-                }
-            }
+            var compareValue = NormalizeEnumValue(Evaluate(methodCall.Arguments[0]), field);
 
             // CompareTo returns: < 0 if less, 0 if equal, > 0 if greater
             // We support: x.CompareTo(y) == 0, x.CompareTo(y) != 0, x.CompareTo(y) > 0, etc.
-            
+
             if (comparisonResult is not int result)
             {
                 throw new NotSupportedException("CompareTo comparisons must be against integer constants");
@@ -237,14 +374,14 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = FieldPath.From(memberExpression),
-                PropertyType = propertyInfo.PropertyType!,
+                PropertyName = field.Path,
+                PropertyType = field.Type,
                 Operator = operatorType,
                 Value = compareValue!
             };
         }
 
-        private FilterNode<T> HandleToStringComparison(MemberExpression memberExpression, PropertyInfo propertyInfo, ExpressionType nodeType, object? comparisonResult)
+        private static FilterNode<T> HandleToStringComparison(FieldRef field, ExpressionType nodeType, object? comparisonResult)
         {
             if (comparisonResult is not string stringValue)
             {
@@ -260,8 +397,8 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = FieldPath.From(memberExpression),
-                PropertyType = propertyInfo.PropertyType!,
+                PropertyName = field.Path,
+                PropertyType = field.Type,
                 Operator = operatorType,
                 Value = stringValue
             };
@@ -269,62 +406,62 @@ public static class FilterMapper
 
         private static bool IsComparisonOperator(ExpressionType nodeType)
         {
-            return nodeType is ExpressionType.Equal or ExpressionType.NotEqual or 
+            return nodeType is ExpressionType.Equal or ExpressionType.NotEqual or
                    ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual or
                    ExpressionType.LessThan or ExpressionType.LessThanOrEqual;
         }
 
         private static void CheckForUnsupportedOperations(Expression expression)
         {
-            if (expression is BinaryExpression binaryExpr && 
-                binaryExpr.NodeType is ExpressionType.Add or ExpressionType.Subtract or 
+            if (expression is BinaryExpression binaryExpr &&
+                binaryExpr.NodeType is ExpressionType.Add or ExpressionType.Subtract or
                 ExpressionType.Multiply or ExpressionType.Divide)
             {
                 throw new NotSupportedException($"Operator {binaryExpr.NodeType} is not supported");
             }
         }
 
-        private static (MemberExpression? memberExpression, bool isLeftSide) GetMemberExpression(BinaryExpression node)
+        /// <summary>
+        /// Finds the document field operand of a comparison, checking the left side first.
+        /// A method call on a field (other than the CompareTo/ToString forms handled earlier)
+        /// is rejected rather than silently ignored.
+        /// </summary>
+        private (FieldRef? field, bool isLeftSide) GetField(BinaryExpression node)
         {
-            // Check left side first
-            if (node.Left is MemberExpression leftMemberExpression)
-                return (leftMemberExpression, true);
+            if (TryGetField(node.Left, out var left))
+            {
+                return (left, true);
+            }
 
-            // Handle conversion expressions (often used with enums and numeric types)
-            if (node.Left is UnaryExpression leftUnary && leftUnary.NodeType == ExpressionType.Convert && 
-                leftUnary.Operand is MemberExpression leftConvertedMember)
-                return (leftConvertedMember, true);
+            if (TryGetField(node.Right, out var right))
+            {
+                return (right, false);
+            }
 
-            if (node.Left is MethodCallExpression leftMethodCall &&
-                leftMethodCall.Object is MemberExpression leftMemberExpr)
-                return (leftMemberExpr, true);
-
-            // Check right side
-            if (node.Right is MemberExpression rightMemberExpression)
-                return (rightMemberExpression, false);
-
-            // Handle conversion expressions (often used with enums and numeric types)
-            if (node.Right is UnaryExpression rightUnary && rightUnary.NodeType == ExpressionType.Convert && 
-                rightUnary.Operand is MemberExpression rightConvertedMember)
-                return (rightConvertedMember, false);
-
-            if (node.Right is MethodCallExpression rightMethodCall &&
-                rightMethodCall.Object is MemberExpression rightMemberExpr)
-                return (rightMemberExpr, false);
+            foreach (var side in new[] { node.Left, node.Right })
+            {
+                if (side is MethodCallExpression call && TryGetField(call.Object, out _))
+                {
+                    throw new NotSupportedException(
+                        $"Method {call.Method.Name} is not supported in comparisons. Only CompareTo and ToString can be compared directly.");
+                }
+            }
 
             return (null, true);
         }
 
-        private static bool IsCompareToMethodCall(Expression expression)
+        private static ExpressionType FlipComparison(ExpressionType type) => type switch
         {
-            return expression is MethodCallExpression { Method.Name: nameof(IComparable.CompareTo) };
-        }
+            ExpressionType.GreaterThan => ExpressionType.LessThan,
+            ExpressionType.GreaterThanOrEqual => ExpressionType.LessThanOrEqual,
+            ExpressionType.LessThan => ExpressionType.GreaterThan,
+            ExpressionType.LessThanOrEqual => ExpressionType.GreaterThanOrEqual,
+            _ => type
+        };
 
         private static bool IsMethodCallWithResult(Expression expression)
         {
-            return expression is MethodCallExpression { Method.Name: nameof(IComparable.CompareTo) or
-                nameof(ToString)
-            };
+            return expression is MethodCallExpression { Method.Name: nameof(IComparable.CompareTo) or nameof(ToString) };
         }
 
         private static Operator GetOperator(ExpressionType type, bool flipComparison = false) => (type, flipComparison) switch
@@ -342,7 +479,287 @@ public static class FilterMapper
             _ => throw new NotSupportedException($"Operator {type} is not supported")
         };
 
-        private bool IsStringNullOrEmptyMethod(MethodCallExpression method)
+        // ------------------------------------------------------------------
+        // Field resolution
+        // ------------------------------------------------------------------
+
+        private static Expression StripConvert(Expression expression)
+        {
+            while (expression is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } convert)
+            {
+                expression = convert.Operand;
+            }
+
+            return expression;
+        }
+
+        /// <summary>
+        /// Resolves a document field reference rooted at the current scope parameter: either the
+        /// bare parameter itself (the element of a scalar collection) or a chain of property
+        /// accesses. Returns false when the expression is rooted elsewhere (a captured value, or a
+        /// parameter of an enclosing scope). Throws when the chain is rooted at the parameter but
+        /// reaches into a scalar or collection type (e.g. <c>d.Name.Length</c>, <c>d.Created.Year</c>),
+        /// since those members have no JSON representation to query.
+        /// </summary>
+        private bool TryGetField(Expression? expression, out FieldRef field)
+        {
+            field = default;
+            if (expression == null)
+            {
+                return false;
+            }
+
+            expression = StripConvert(expression);
+
+            if (expression is ParameterExpression parameter)
+            {
+                if (parameter != _parameter)
+                {
+                    return false;
+                }
+
+                field = new FieldRef(string.Empty, parameter.Type, null);
+                return true;
+            }
+
+            if (expression is not MemberExpression member)
+            {
+                return false;
+            }
+
+            // Walk to the root first: only chains rooted at our parameter are document fields.
+            var chain = new List<MemberExpression>();
+            Expression? current = member;
+            while (current is MemberExpression m)
+            {
+                chain.Add(m);
+                current = m.Expression;
+            }
+
+            if (current is not ParameterExpression root || root != _parameter)
+            {
+                return false;
+            }
+
+            // Then build the path from the root outwards, validating each segment.
+            var segments = new List<string>();
+            PropertyInfo? leaf = null;
+            var leafType = root.Type;
+            for (var i = chain.Count - 1; i >= 0; i--)
+            {
+                var m = chain[i];
+                var ownerType = m.Expression!.Type;
+
+                if (Nullable.GetUnderlyingType(ownerType) != null)
+                {
+                    if (m.Member.Name == nameof(Nullable<int>.Value))
+                    {
+                        // d.Nullable.Value reads the same JSON value as d.Nullable, typed as the
+                        // underlying value type.
+                        leafType = m.Type;
+                        continue;
+                    }
+
+                    throw new NotSupportedException(
+                        $"Member {m.Member.Name} of {ownerType.Name} is not supported in filter expressions. Compare the nullable field directly or use HasValue.");
+                }
+
+                if (IsScalarType(ownerType) || typeof(IEnumerable).IsAssignableFrom(ownerType))
+                {
+                    throw new NotSupportedException(
+                        $"Member {m.Member.Name} of {ownerType.Name} is not supported in filter expressions. Only document fields, nested fields and collection Count/Length can be queried.");
+                }
+
+                if (m.Member is not PropertyInfo property)
+                {
+                    throw new NotSupportedException(
+                        $"Member {m.Member.Name} is not a property. Only public properties are serialized and can be filtered on.");
+                }
+
+                segments.Add(property.Name);
+                leaf = property;
+                leafType = property.PropertyType;
+            }
+
+            field = new FieldRef(string.Join(".", segments), leafType, leaf);
+            return true;
+        }
+
+        private static bool IsScalarType(Type type)
+        {
+            return type.IsPrimitive
+                   || type.IsEnum
+                   || type == typeof(string)
+                   || type == typeof(decimal)
+                   || type == typeof(DateTime)
+                   || type == typeof(DateTimeOffset)
+                   || type == typeof(DateOnly)
+                   || type == typeof(TimeOnly)
+                   || type == typeof(TimeSpan)
+                   || type == typeof(Guid);
+        }
+
+        /// <summary>
+        /// Recognizes <c>collection.Count</c>, <c>array.Length</c>, <c>collection.Count()</c>,
+        /// <c>collection.LongCount()</c> and <c>collection.Count(predicate)</c> on a document field.
+        /// </summary>
+        private bool TryGetCollectionCount(Expression expression, out CountRef count)
+        {
+            count = default;
+            expression = StripConvert(expression);
+
+            if (expression is MemberExpression { Member.Name: "Count" or "Length" } member
+                && member.Expression != null
+                && CollectionTypes.IsCollection(member.Expression.Type)
+                && TryGetField(member.Expression, out var memberField))
+            {
+                count = new CountRef(memberField, null);
+                return true;
+            }
+
+            // array.Length compiles to a dedicated ArrayLength node rather than a member access.
+            if (expression is UnaryExpression { NodeType: ExpressionType.ArrayLength } arrayLength
+                && TryGetField(arrayLength.Operand, out var arrayField))
+            {
+                count = new CountRef(arrayField, null);
+                return true;
+            }
+
+            if (expression is MethodCallExpression { Method.DeclaringType: { } declaringType } call
+                && declaringType == typeof(Enumerable)
+                && call.Method.Name is nameof(Enumerable.Count) or nameof(Enumerable.LongCount)
+                && call.Arguments.Count is 1 or 2
+                && TryGetField(call.Arguments[0], out var sourceField))
+            {
+                var predicate = call.Arguments.Count == 2 ? UnwrapLambda(call.Arguments[1]) : null;
+                count = new CountRef(sourceField, predicate);
+                return true;
+            }
+
+            return false;
+        }
+
+        private FilterNode<T> BuildCollectionCount(CountRef count, Operator op, Expression valueExpression)
+        {
+            var value = Evaluate(valueExpression)
+                        ?? throw new NotSupportedException("A collection count cannot be compared to null");
+
+            return new FilterNode<T>.CollectionCount
+            {
+                PropertyName = count.Collection.Path,
+                ElementType = CollectionTypes.GetElementType(count.Collection.Type),
+                Predicate = count.Predicate == null ? null : MapElementPredicate(count.Predicate),
+                Operator = op,
+                Value = Convert.ToInt64(value)
+            };
+        }
+
+        private static LambdaExpression UnwrapLambda(Expression expression)
+        {
+            if (expression is UnaryExpression { NodeType: ExpressionType.Quote } quote)
+            {
+                expression = quote.Operand;
+            }
+
+            return expression as LambdaExpression
+                   ?? throw new NotSupportedException($"Expected a lambda predicate but found '{expression}'");
+        }
+
+        /// <summary>
+        /// Maps a predicate over collection elements in a fresh scope rooted at the lambda parameter.
+        /// </summary>
+        private static FilterNode<T> MapElementPredicate(LambdaExpression predicate)
+        {
+            if (predicate.Parameters.Count != 1)
+            {
+                throw new NotSupportedException("Collection predicates must take exactly one parameter");
+            }
+
+            return new FilterExpressionVisitor<T>(predicate.Parameters[0]).VisitExpression(predicate.Body);
+        }
+
+        // ------------------------------------------------------------------
+        // Value evaluation
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Evaluates a value-side expression (constants, captured variables, method calls on them).
+        /// Rejects expressions that reference any lambda parameter: a document field cannot be
+        /// used as a value, and a collection predicate cannot reach the enclosing document.
+        /// </summary>
+        private static object? Evaluate(Expression expression)
+        {
+            if (ReferencesParameter(expression))
+            {
+                throw new NotSupportedException(
+                    $"Expression '{expression}' references a document parameter and cannot be evaluated as a value. " +
+                    "Comparing two document fields, or referencing the outer document inside a collection predicate, is not supported.");
+            }
+
+            return Expression.Lambda(expression).Compile().DynamicInvoke();
+        }
+
+        private static bool ReferencesParameter(Expression expression)
+        {
+            var finder = new ParameterFinder();
+            finder.Visit(expression);
+            return finder.Found;
+        }
+
+        private sealed class ParameterFinder : ExpressionVisitor
+        {
+            public bool Found { get; private set; }
+
+            protected override Expression VisitParameter(ParameterExpression node)
+            {
+                Found = true;
+                return node;
+            }
+        }
+
+        private sealed class ParameterReplacer(ParameterExpression parameter, Expression replacement) : ExpressionVisitor
+        {
+            protected override Expression VisitParameter(ParameterExpression node) =>
+                node == parameter ? replacement : node;
+        }
+
+        /// <summary>
+        /// Converts an enum value to the representation the field is serialized with (its name
+        /// for string-serialized enums, otherwise its underlying integer), so providers compare
+        /// against what is stored in the JSON document.
+        /// </summary>
+        private static object? NormalizeEnumValue(object? value, FieldRef field)
+        {
+            if (value == null)
+            {
+                return null;
+            }
+
+            var underlyingType = Nullable.GetUnderlyingType(field.Type) ?? field.Type;
+            if (!underlyingType.IsEnum)
+            {
+                return value;
+            }
+
+            var format = field.Property != null
+                ? EnumSerializationAnalyzer.GetPropertyFormat(field.Property)
+                : EnumSerializationAnalyzer.GetDefaultFormat(underlyingType);
+
+            if (format == EnumSerializationFormat.String)
+            {
+                // The value may arrive as the enum's underlying integer (via a Convert node) or as
+                // the enum itself; both round-trip through Enum.ToObject to the member name.
+                return Enum.ToObject(underlyingType, value).ToString();
+            }
+
+            return Convert.ChangeType(value, underlyingType.GetEnumUnderlyingType());
+        }
+
+        // ------------------------------------------------------------------
+        // Method calls
+        // ------------------------------------------------------------------
+
+        private static bool IsStringNullOrEmptyMethod(MethodCallExpression method)
         {
             return method.Method.DeclaringType == typeof(string) &&
                    method.Method.Name is nameof(string.IsNullOrEmpty) or nameof(string.IsNullOrWhiteSpace);
@@ -350,47 +767,97 @@ public static class FilterMapper
 
         private FilterNode<T> VisitStringNullOrEmptyMethod(MethodCallExpression method)
         {
-            if (method.Arguments.Count != 1 || method.Arguments[0] is not MemberExpression memberExpression)
+            if (method.Arguments.Count != 1 || !TryGetField(method.Arguments[0], out var field))
             {
-                throw new NotSupportedException($"Unsupported {method.Method.Name} usage");
+                throw new NotSupportedException($"Unsupported {method.Method.Name} usage - the argument must be a document field");
             }
 
-            var propertyInfo = (PropertyInfo)memberExpression.Member;
             var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty)
                 ? Operator.IsNullOrEmpty
                 : Operator.IsNullOrWhiteSpace;
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = FieldPath.From(memberExpression),
-                PropertyType = propertyInfo.PropertyType!,
+                PropertyName = field.Path,
+                PropertyType = field.Type,
                 Operator = operatorType,
                 Value = true
             };
         }
 
-        private FilterNode<T> VisitNegatedStringNullOrEmptyMethod(MethodCallExpression method)
+        private static bool IsQuantifierMethod(MethodCallExpression method)
         {
-            if (method.Arguments.Count != 1 || method.Arguments[0] is not MemberExpression memberExpression)
+            if (method.Method.DeclaringType == typeof(Enumerable))
             {
-                throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage");
+                return method.Method.Name is nameof(Enumerable.Any) or nameof(Enumerable.All)
+                       && method.Arguments.Count is 1 or 2;
             }
 
-            var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var operatorType = method.Method.Name == nameof(string.IsNullOrEmpty)
-                ? Operator.IsNotNullOrEmpty
-                : Operator.IsNotNullOrWhiteSpace;
+            // List<T>.Exists / List<T>.TrueForAll and the Array equivalents.
+            return method.Method.Name is "Exists" or "TrueForAll"
+                   && method.Arguments.Count == 1
+                   && method.Object != null
+                   && CollectionTypes.IsCollection(method.Object.Type);
+        }
 
-            return new FilterNode<T>.Condition
+        private FilterNode<T> VisitQuantifierMethod(MethodCallExpression method)
+        {
+            var (source, predicateExpression) = method.Object == null
+                ? (method.Arguments[0], method.Arguments.Count == 2 ? method.Arguments[1] : null)
+                : (method.Object, method.Arguments[0]);
+
+            var kind = method.Method.Name is nameof(Enumerable.Any) or "Exists"
+                ? QuantifierKind.Any
+                : QuantifierKind.All;
+
+            var predicate = predicateExpression == null ? null : UnwrapLambda(predicateExpression);
+
+            // Case 1: quantifier over a document collection field.
+            if (TryGetField(source, out var field))
             {
-                PropertyName = FieldPath.From(memberExpression),
-                PropertyType = propertyInfo.PropertyType!,
-                Operator = operatorType,
-                Value = true
+                if (!CollectionTypes.IsCollection(field.Type))
+                {
+                    throw new NotSupportedException($"{method.Method.Name} can only be applied to a collection field");
+                }
+
+                return new FilterNode<T>.Quantifier
+                {
+                    PropertyName = field.Path,
+                    ElementType = CollectionTypes.GetElementType(field.Type),
+                    Kind = kind,
+                    Predicate = predicate == null ? null : MapElementPredicate(predicate)
+                };
+            }
+
+            // Case 2: quantifier over a constant collection, e.g. `wanted.Any(w => d.Tags.Contains(w))`
+            // or `required.All(r => d.Tags.Contains(r))`. The set is known up front, so the
+            // predicate is expanded once per element into an OR (Any) / AND (All) group.
+            if (Evaluate(source) is not IEnumerable items)
+            {
+                throw new NotSupportedException(
+                    $"Unsupported {method.Method.Name} usage - the source must be a document collection field or a constant collection");
+            }
+
+            var values = items.Cast<object?>().ToList();
+            if (predicate == null)
+            {
+                return ConstantNode(values.Count > 0);
+            }
+
+            var parameter = predicate.Parameters[0];
+            var conditions = values
+                .Select(item => new ParameterReplacer(parameter, Expression.Constant(item, parameter.Type)).Visit(predicate.Body))
+                .Select(VisitExpression)
+                .ToList();
+
+            return new FilterNode<T>.Group
+            {
+                Operator = kind == QuantifierKind.Any ? LogicalOperator.Or : LogicalOperator.And,
+                Conditions = conditions
             };
         }
 
-        private bool IsSetOperatorMethod(MethodCallExpression method)
+        private static bool IsSetOperatorMethod(MethodCallExpression method)
         {
             // Handle collection.Contains (for IEnumerable<T>.Contains extension method)
             if (method.Method.Name == nameof(Enumerable.Contains) && method.Method.DeclaringType == typeof(Enumerable))
@@ -403,64 +870,66 @@ public static class FilterMapper
             return false;
         }
 
-        private bool IsStringOperatorMethod(MethodCallExpression method)
+        private static bool IsStringOperatorMethod(MethodCallExpression method)
         {
             if (method.Method.DeclaringType != typeof(string))
                 return false;
 
-            return method.Method.Name is 
+            return method.Method.Name is
                 nameof(string.Contains) or
                 nameof(string.StartsWith) or
                 nameof(string.EndsWith);
         }
 
-        private bool IsComparisonMethod(MethodCallExpression method)
+        private static bool IsComparisonMethod(MethodCallExpression method)
         {
-            return method.Method.Name is 
+            return method.Method.Name is
                 nameof(object.Equals) or
                 nameof(IComparable.CompareTo) or
-                "CompareTo" or // Handle both generic and non-generic CompareTo
                 nameof(object.ToString);
         }
 
         private FilterNode<T> VisitSetOperatorMethod(MethodCallExpression method)
         {
             // Contains comes in two shapes that we map to different operators depending on which
-            // operand is the document field (the parameter-rooted member):
+            // operand is the document field:
             //   1. constantCollection.Contains(d.Field)  => In        (value set membership)
             //   2. d.Collection.Contains(constant)        => CollectionContains (array field holds value)
             var (collectionExpr, itemExpr) = ExtractContainsOperands(method);
 
-            var itemMember = AsParameterRootedMember(itemExpr);
-            var collectionMember = AsParameterRootedMember(collectionExpr);
+            var isItemField = TryGetField(itemExpr, out var itemField);
+            var isCollectionField = TryGetField(collectionExpr, out var collectionField);
 
             // Case 1: the item is the document field, the collection is a constant.
-            if (itemMember != null && collectionMember == null)
+            if (isItemField && !isCollectionField)
             {
-                var leaf = (PropertyInfo)itemMember.Member;
-                var collectionValue = GetCollectionValue(collectionExpr)
+                var collectionValue = Evaluate(collectionExpr)
                     ?? throw new NotSupportedException("Unsupported Contains usage - unable to evaluate the collection");
 
                 return new FilterNode<T>.Condition
                 {
-                    PropertyName = FieldPath.From(itemMember),
-                    PropertyType = leaf.PropertyType,
+                    PropertyName = itemField.Path,
+                    PropertyType = itemField.Type,
                     Operator = Operator.In,
                     Value = collectionValue
                 };
             }
 
             // Case 2: the collection is the document field (an array/list), the item is a constant.
-            if (collectionMember != null && itemMember == null)
+            if (isCollectionField && !isItemField)
             {
-                var leaf = (PropertyInfo)collectionMember.Member;
-                var itemValue = Expression.Lambda(itemExpr).Compile().DynamicInvoke()
+                if (!CollectionTypes.IsCollection(collectionField.Type))
+                {
+                    throw new NotSupportedException("Unsupported Contains usage - the document field must be a collection");
+                }
+
+                var itemValue = Evaluate(itemExpr)
                     ?? throw new NotSupportedException("Unsupported Contains usage - the searched value cannot be null");
 
                 return new FilterNode<T>.Condition
                 {
-                    PropertyName = FieldPath.From(collectionMember),
-                    PropertyType = leaf.PropertyType,
+                    PropertyName = collectionField.Path,
+                    PropertyType = collectionField.Type,
                     Operator = Operator.CollectionContains,
                     Value = itemValue
                 };
@@ -469,35 +938,11 @@ public static class FilterMapper
             throw new NotSupportedException("Unsupported Contains usage - exactly one operand must be a document field");
         }
 
-        private FilterNode<T> VisitNegatedSetOperatorMethod(MethodCallExpression method)
-        {
-            var positiveResult = VisitSetOperatorMethod(method);
-            if (positiveResult is FilterNode<T>.Condition condition)
-            {
-                var negatedOperator = condition.Operator switch
-                {
-                    Operator.Contains => Operator.NotContains,
-                    Operator.In => Operator.NotIn,
-                    Operator.CollectionContains => Operator.CollectionNotContains,
-                    _ => throw new NotSupportedException($"Cannot negate operator {condition.Operator}")
-                };
-
-                return new FilterNode<T>.Condition
-                {
-                    PropertyName = condition.PropertyName,
-                    PropertyType = condition.PropertyType,
-                    Operator = negatedOperator,
-                    Value = condition.Value
-                };
-            }
-
-            throw new NotSupportedException("Cannot negate non-condition result");
-        }
-
         /// <summary>
         /// Extracts the (collection, item) operands from a Contains call, normalizing across the
         /// static <c>Enumerable.Contains(collection, item)</c> / <c>MemoryExtensions.Contains</c>
-        /// forms and the instance <c>collection.Contains(item)</c> form.
+        /// forms and the instance <c>collection.Contains(item)</c> form. Implicit array-to-span
+        /// conversions are unwrapped so the underlying array is visible.
         /// </summary>
         private static (Expression collection, Expression item) ExtractContainsOperands(MethodCallExpression method)
         {
@@ -506,68 +951,33 @@ public static class FilterMapper
             // arguments; any trailing comparer argument is ignored.
             if (method.Object == null && method.Arguments.Count >= 2)
             {
-                return (method.Arguments[0], method.Arguments[1]);
+                return (UnwrapImplicitConversion(method.Arguments[0]), method.Arguments[1]);
             }
 
             // Instance form: collection.Contains(item[, comparer]).
             if (method.Object != null && method.Arguments.Count >= 1)
             {
-                return (method.Object, method.Arguments[0]);
+                return (UnwrapImplicitConversion(method.Object), method.Arguments[0]);
             }
 
             throw new NotSupportedException("Unsupported Contains usage - unable to extract operands");
         }
 
-        /// <summary>
-        /// Returns the member expression when <paramref name="expression"/> is a member access
-        /// chain rooted at the lambda parameter (a document field); otherwise null.
-        /// </summary>
-        private static MemberExpression? AsParameterRootedMember(Expression? expression)
+        private static Expression UnwrapImplicitConversion(Expression expression)
         {
-            if (expression is UnaryExpression { NodeType: ExpressionType.Convert } convert)
-            {
-                expression = convert.Operand;
-            }
-
-            if (expression is not MemberExpression member)
-            {
-                return null;
-            }
-
-            Expression? current = member;
-            while (current is MemberExpression m)
-            {
-                current = m.Expression;
-            }
-
-            return current is ParameterExpression ? member : null;
-        }
-
-        private static object? GetCollectionValue(Expression expression)
-        {
-            // Handle MethodCallExpression like op_Implicit(array)
-            if (expression is MethodCallExpression methodCall)
-            {
-                // If it's an implicit conversion from array to span, get the underlying array
-                if (methodCall.Method.Name == "op_Implicit" && methodCall.Arguments.Count == 1)
-                {
-                    return Expression.Lambda(methodCall.Arguments[0]).Compile().DynamicInvoke();
-                }
-            }
-            
-            // Default case - try to compile the expression directly
-            return Expression.Lambda(expression).Compile().DynamicInvoke();
+            return expression is MethodCallExpression { Method.Name: "op_Implicit", Arguments.Count: 1 } conversion
+                ? conversion.Arguments[0]
+                : expression;
         }
 
         private FilterNode<T> VisitStringOperatorMethod(MethodCallExpression method)
         {
-            if (method.Object is not MemberExpression memberExpression)
+            if (!TryGetField(method.Object, out var field))
             {
                 throw new NotSupportedException($"Unsupported {method.Method.Name} usage - property must be on the left side");
             }
 
-            var propertyInfo = (PropertyInfo)memberExpression.Member;
-            var value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+            var value = Evaluate(method.Arguments[0]);
 
             // Determine if case-insensitive by checking if StringComparison parameter is provided
             var isIgnoreCase = false;
@@ -575,8 +985,8 @@ public static class FilterMapper
             {
                 if (constantExpr.Value is StringComparison comparison)
                 {
-                    isIgnoreCase = comparison is StringComparison.OrdinalIgnoreCase or 
-                                                StringComparison.CurrentCultureIgnoreCase or 
+                    isIgnoreCase = comparison is StringComparison.OrdinalIgnoreCase or
+                                                StringComparison.CurrentCultureIgnoreCase or
                                                 StringComparison.InvariantCultureIgnoreCase;
                 }
             }
@@ -591,162 +1001,58 @@ public static class FilterMapper
 
             return new FilterNode<T>.Condition
             {
-                PropertyName = FieldPath.From(memberExpression),
-                PropertyType = propertyInfo.PropertyType!,
+                PropertyName = field.Path,
+                PropertyType = field.Type,
                 Operator = operatorType,
                 Value = value!
             };
         }
 
-        private FilterNode<T> VisitNegatedStringOperatorMethod(MethodCallExpression method)
-        {
-            var positiveResult = VisitStringOperatorMethod(method);
-            if (positiveResult is FilterNode<T>.Condition condition)
-            {
-                var negatedOperator = condition.Operator switch
-                {
-                    Operator.Contains => Operator.NotContains,
-                    Operator.ContainsIgnoreCase => Operator.NotContainsIgnoreCase,
-                    Operator.StartsWith => Operator.NotStartsWith,
-                    Operator.StartsWithIgnoreCase => Operator.NotStartsWithIgnoreCase,
-                    Operator.EndsWith => Operator.NotEndsWith,
-                    Operator.EndsWithIgnoreCase => Operator.NotEndsWithIgnoreCase,
-                    _ => throw new NotSupportedException($"Cannot negate string operator {condition.Operator}")
-                };
-
-                return new FilterNode<T>.Condition
-                {
-                    PropertyName = condition.PropertyName,
-                    PropertyType = condition.PropertyType,
-                    Operator = negatedOperator,
-                    Value = condition.Value
-                };
-            }
-
-            throw new NotSupportedException("Cannot negate non-condition result");
-        }
-
         private FilterNode<T> VisitComparisonMethod(MethodCallExpression method)
         {
-            MemberExpression? memberExpression = null;
-            object? value = null;
+            switch (method.Method.Name)
+            {
+                case nameof(IComparable.CompareTo):
+                    throw new NotSupportedException(
+                        "CompareTo method should be used with comparison operators (e.g., x.CompareTo(y) == 0, x.CompareTo(y) > 0)");
+                case nameof(object.ToString):
+                    throw new NotSupportedException(
+                        "ToString method should be used with comparison operators (e.g., x.ToString() == \"value\")");
+            }
+
+            FieldRef field;
+            Expression valueExpression;
 
             // Case 1: property.Equals(constant) - x.Age.Equals(30)
-            if (method.Object is MemberExpression objMember)
+            if (TryGetField(method.Object, out field) && method.Arguments.Count >= 1)
             {
-                memberExpression = objMember;
-                value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
+                valueExpression = method.Arguments[0];
             }
             // Case 2: constant.Equals(property) - 30.Equals(x.Age)
-            else if (method.Arguments.Count > 0 && method.Arguments[0] is MemberExpression argMember)
+            else if (method.Object != null && method.Arguments.Count >= 1 && TryGetField(method.Arguments[0], out field))
             {
-                memberExpression = argMember;
-                value = Expression.Lambda(method.Object!).Compile().DynamicInvoke();
+                valueExpression = method.Object;
             }
-
-            // Handle enum serialization based on the property's serialization format
-            if (memberExpression != null && value != null)
-            {
-                var enumPropertyInfo = (PropertyInfo)memberExpression.Member;
-                var valueType = value.GetType();
-                var underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
-                
-                if (underlyingType.IsEnum)
-                {
-                    var format = EnumSerializationAnalyzer.GetPropertyFormat(enumPropertyInfo);
-                    if (format == EnumSerializationFormat.String)
-                    {
-                        value = value.ToString();
-                    }
-                    else
-                    {
-                        value = Convert.ChangeType(value, underlyingType.GetEnumUnderlyingType());
-                    }
-                }
-            }
-
-            if (memberExpression == null)
+            else
             {
                 throw new NotSupportedException($"Unsupported {method.Method.Name} usage - one operand must be a property");
             }
 
-            var propertyInfo = (PropertyInfo)memberExpression.Member;
-
-            return method.Method.Name switch
+            if (method.Arguments.Count > 1)
             {
-                nameof(object.Equals) => new FilterNode<T>.Condition
-                {
-                    PropertyName = FieldPath.From(memberExpression),
-                    PropertyType = propertyInfo.PropertyType!,
-                    Operator = Operator.Equal,
-                    Value = value!
-                },
-                nameof(IComparable.CompareTo) or "CompareTo" => throw new NotSupportedException(
-                    "CompareTo method should be used with comparison operators (e.g., x.CompareTo(y) == 0, x.CompareTo(y) > 0)"),
-                nameof(object.ToString) => throw new NotSupportedException(
-                    "ToString method should be used with comparison operators (e.g., x.ToString() == \"value\")"),
-                _ => throw new NotSupportedException($"Comparison method {method.Method.Name} is not supported")
-            };
-        }
-
-        private FilterNode<T> VisitNegatedComparisonMethod(MethodCallExpression method)
-        {
-            if (method.Method.Name == nameof(object.Equals))
-            {
-                MemberExpression? memberExpression = null;
-                object? value = null;
-
-                // Case 1: property.Equals(constant) - x.Age.Equals(30)
-                if (method.Object is MemberExpression objMember)
-                {
-                    memberExpression = objMember;
-                    value = Expression.Lambda(method.Arguments[0]).Compile().DynamicInvoke();
-                }
-                // Case 2: constant.Equals(property) - 30.Equals(x.Age)
-                else if (method.Arguments.Count > 0 && method.Arguments[0] is MemberExpression argMember)
-                {
-                    memberExpression = argMember;
-                    value = Expression.Lambda(method.Object!).Compile().DynamicInvoke();
-                }
-
-                // Handle enum serialization based on the property's serialization format
-                if (memberExpression != null && value != null)
-                {
-                    var enumPropertyInfo = (PropertyInfo)memberExpression.Member;
-                    var valueType = value.GetType();
-                    var underlyingType = Nullable.GetUnderlyingType(valueType) ?? valueType;
-                    
-                    if (underlyingType.IsEnum)
-                    {
-                        var format = EnumSerializationAnalyzer.GetPropertyFormat(enumPropertyInfo);
-                        if (format == EnumSerializationFormat.String)
-                        {
-                            value = value.ToString();
-                        }
-                        else
-                        {
-                            value = Convert.ChangeType(value, underlyingType.GetEnumUnderlyingType());
-                        }
-                    }
-                }
-
-                if (memberExpression == null)
-                {
-                    throw new NotSupportedException($"Unsupported negated {method.Method.Name} usage - one operand must be a property");
-                }
-
-                var propertyInfo = (PropertyInfo)memberExpression.Member;
-
-                return new FilterNode<T>.Condition
-                {
-                    PropertyName = FieldPath.From(memberExpression),
-                    PropertyType = propertyInfo.PropertyType!,
-                    Operator = Operator.NotEqual,
-                    Value = value!
-                };
+                throw new NotSupportedException(
+                    "Equals with a StringComparison is not supported. Use == for ordinal equality.");
             }
 
-            throw new NotSupportedException($"Cannot negate comparison method {method.Method.Name}");
+            var value = NormalizeEnumValue(Evaluate(valueExpression), field);
+
+            return new FilterNode<T>.Condition
+            {
+                PropertyName = field.Path,
+                PropertyType = field.Type,
+                Operator = Operator.Equal,
+                Value = value!
+            };
         }
     }
 }

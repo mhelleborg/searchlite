@@ -8,7 +8,7 @@ SearchLite is a lightweight .NET library that provides full-text search capabili
 
 - Unified search interface for SQLite and Postgres
 - Strongly-typed document indexing and querying
-- Flexible filtering with LINQ-style expressions
+- Flexible filtering with LINQ-style expressions, including nested fields and collection predicates (`Any`, `All`, `Count`)
 - Configurable search options including scoring and result limits
 - Async-first API design
 - Minimal dependencies
@@ -150,13 +150,106 @@ holds a given value:
 > This is distinct from `In`-style filters, where a fixed set is tested against a single
 > field — e.g. `var ids = new[] { "1", "2" }; request.Where(p => ids.Contains(p.Id));`
 
+### Collection predicates (`Any` / `All`)
+
+Filter on the elements of a collection, including collections of objects:
+
+```csharp
+public class Order : ISearchableDocument
+{
+    public string Id { get; set; }
+    public List<OrderLine> Lines { get; set; }
+    public List<string> Tags { get; set; }
+    public string GetSearchText() => Id;
+}
+
+public class OrderLine
+{
+    public string Sku { get; set; }
+    public int Quantity { get; set; }
+    public decimal Price { get; set; }
+    public bool Shipped { get; set; }
+    public List<Note> Notes { get; set; }
+}
+
+// At least one line priced above 100
+.Where(o => o.Lines.Any(l => l.Price > 100))
+
+// All conditions must hold for the *same* element
+.Where(o => o.Lines.Any(l => l.Sku == "ABC" && l.Quantity >= 2))
+
+// Every line shipped (vacuously true for an empty collection)
+.Where(o => o.Lines.All(l => l.Shipped))
+
+// Non-empty / empty collections
+.Where(o => o.Lines.Any())
+.Where(o => !o.Tags.Any())
+
+// Predicates over collections of scalars use the element directly
+.Where(o => o.Tags.Any(t => t.StartsWith("promo-")))
+
+// Nested collections, at any depth
+.Where(o => o.Lines.Any(l => l.Notes.Any(n => n.Rating >= 4)))
+```
+
+Element predicates accept everything a top-level filter does: comparisons, string operators,
+`Contains`, `In`-style sets, nested fields, nested `Any`/`All`, counts and negation. A predicate
+cannot refer back to the enclosing document (`o.Lines.Any(l => l.Price > o.Budget)` throws
+`NotSupportedException`). `List<T>.Exists` / `TrueForAll` are accepted as aliases for `Any` / `All`.
+
+### Collection size
+
+```csharp
+.Where(o => o.Tags.Count > 2)                    // List.Count, array.Length or Count()
+.Where(o => o.Lines.Count(l => l.Shipped) >= 1)  // count of matching elements
+```
+
+A null or missing collection counts as zero.
+
+### Matching against a set of values
+
+```csharp
+var wanted = new[] { "sale", "clearance" };
+
+.Where(o => o.Tags.Any(t => wanted.Contains(t)))   // has any of the values
+.Where(o => wanted.Any(w => o.Tags.Contains(w)))   // same thing, written the other way round
+.Where(o => wanted.All(w => o.Tags.Contains(w)))   // has all of the values
+```
+
+Quantifiers over a constant set are expanded at mapping time into an `OR` (`Any`) or `AND`
+(`All`) of per-value filters.
+
+### Negation and nullable fields
+
+Any filter can be negated with `!`, including groups and collection predicates. Nullable
+fields can be tested with `HasValue` / `Value`.
+
+```csharp
+.Where(o => !(o.Total > 100 || o.Tags.Contains("sale")))
+.Where(o => !o.Lines.Any(l => l.Backordered))
+.Where(o => o.ShippedAt.HasValue)
+```
+
+### Not supported
+
+The following are rejected with a `NotSupportedException` rather than translated incorrectly:
+
+- Comparing two document fields to each other (`o.Total > o.Budget`)
+- Referencing the outer document inside a collection predicate
+- Members of scalar types (`o.Name.Length`, `o.Created.Year`) and method calls on fields
+  other than the documented ones (`o.Name.ToUpper() == "X"`)
+- Dictionary indexers (`o.Attributes["color"]`) and case-insensitive `Equals`
+
 ### Efficient execution on PostgreSQL
 
 On PostgreSQL, equality and collection-membership filters compile to JSONB containment
 (`document @> '{...}'`), which is served by the `GIN(jsonb_path_ops)` index SearchLite
-creates on every index — so these filters stay fast as collections grow. Range and string
-comparisons use JSON path extraction. SQLite provides the same query capabilities using
-`json_extract` and `json_each`.
+creates on every index — so these filters stay fast as collections grow. This includes
+`Any` predicates made of equalities and membership checks: `o.Lines.Any(l => l.Sku == "ABC"
+&& l.Quantity == 2)` becomes `document @> '{"Lines":[{"Sku":"ABC","Quantity":2}]}'`. Range
+and string comparisons, `All`, and counts use `jsonb_array_elements` subqueries and JSON path
+extraction. SQLite, DuckDB and MariaDB provide the same query capabilities using their JSON
+functions (`json_each`, `unnest` and `JSON_TABLE` respectively).
 
 ## Advanced Usage
 

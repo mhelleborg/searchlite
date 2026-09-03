@@ -33,6 +33,13 @@ public class WhereClauseTests
         public required List<string> Roles { get; set; }
     }
 
+    public class TestItem
+    {
+        public required string Sku { get; set; }
+        public int Qty { get; set; }
+        public required List<string> Tags { get; set; }
+    }
+
     public class TestModel
     {
         public int Age { get; set; }
@@ -44,6 +51,7 @@ public class WhereClauseTests
         public TestEnum EnumValue { get; set; }
         public TestStringEnum StringEnumValue { get; set; }
         public required List<string> Labels { get; set; }
+        public required List<TestItem> Items { get; set; }
         public required TestAuthor Author { get; set; }
     }
 
@@ -264,7 +272,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Labels.Contains("urgent"));
 
-        clause.Sql.Should().Be("EXISTS (SELECT 1 FROM json_each(document, '$.Labels') WHERE value = @p0)");
+        clause.Sql.Should().Be("EXISTS (SELECT 1 FROM json_each(document, '$.Labels') AS e0 WHERE e0.value = @p0)");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("urgent");
     }
@@ -274,7 +282,7 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => !x.Labels.Contains("urgent"));
 
-        clause.Sql.Should().Be("NOT EXISTS (SELECT 1 FROM json_each(document, '$.Labels') WHERE value = @p0)");
+        clause.Sql.Should().Be("NOT EXISTS (SELECT 1 FROM json_each(document, '$.Labels') AS e0 WHERE e0.value = @p0)");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("urgent");
     }
@@ -284,9 +292,97 @@ public class WhereClauseTests
     {
         var clause = BuildClause(x => x.Author.Roles.Contains("admin"));
 
-        clause.Sql.Should().Be("EXISTS (SELECT 1 FROM json_each(document, '$.Author.Roles') WHERE value = @p0)");
+        clause.Sql.Should().Be("EXISTS (SELECT 1 FROM json_each(document, '$.Author.Roles') AS e0 WHERE e0.value = @p0)");
         clause.Parameters.Should().HaveCount(1);
         clause.Parameters[0].Value.Should().Be("admin");
+    }
+
+    private const string ItemsSource =
+        "json_each(CASE WHEN json_type(document, '$.Items') = 'array' THEN json_extract(document, '$.Items') ELSE '[]' END) AS e0";
+
+    private const string LabelsSource =
+        "json_each(CASE WHEN json_type(document, '$.Labels') = 'array' THEN json_extract(document, '$.Labels') ELSE '[]' END) AS e0";
+
+    [Fact]
+    public void Should_Handle_Any_WithEquality()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Sku == "abc"));
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {ItemsSource} WHERE CAST(json_extract(e0.value, '$.Sku') AS TEXT) = @p0)");
+        clause.Parameters.Should().HaveCount(1);
+        clause.Parameters[0].Value.Should().Be("abc");
+    }
+
+    [Fact]
+    public void Should_Handle_All()
+    {
+        var clause = BuildClause(x => x.Items.All(i => i.Qty > 1));
+
+        clause.Sql.Should().Be($"NOT EXISTS (SELECT 1 FROM {ItemsSource} WHERE NOT (CAST(json_extract(e0.value, '$.Qty') AS INTEGER) > @p0))");
+        clause.Parameters[0].Value.Should().Be(1);
+    }
+
+    [Fact]
+    public void Should_Handle_Any_WithoutPredicate()
+    {
+        var clause = BuildClause(x => x.Items.Any());
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {ItemsSource})");
+        clause.Parameters.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Should_Handle_Negated_Any()
+    {
+        var clause = BuildClause(x => !x.Items.Any(i => i.Qty > 1));
+
+        clause.Sql.Should().Be($"NOT (EXISTS (SELECT 1 FROM {ItemsSource} WHERE CAST(json_extract(e0.value, '$.Qty') AS INTEGER) > @p0))");
+    }
+
+    [Fact]
+    public void Should_Handle_Any_OverScalarCollection()
+    {
+        var clause = BuildClause(x => x.Labels.Any(l => l.StartsWith("a")));
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {LabelsSource} WHERE CAST(e0.value AS TEXT) GLOB @p0)");
+        clause.Parameters[0].Value.Should().Be("a*");
+    }
+
+    [Fact]
+    public void Should_Handle_CollectionContains_InsideAny()
+    {
+        var clause = BuildClause(x => x.Items.Any(i => i.Tags.Contains("t")));
+
+        clause.Sql.Should().Be($"EXISTS (SELECT 1 FROM {ItemsSource} WHERE EXISTS (SELECT 1 FROM json_each(e0.value, '$.Tags') AS e1 WHERE e1.value = @p0))");
+        clause.Parameters[0].Value.Should().Be("t");
+    }
+
+    [Fact]
+    public void Should_Handle_Count()
+    {
+        var clause = BuildClause(x => x.Labels.Count > 2);
+
+        clause.Sql.Should().Be("COALESCE(json_array_length(document, '$.Labels'), 0) > @p0");
+        clause.Parameters[0].Value.Should().Be(2L);
+    }
+
+    [Fact]
+    public void Should_Handle_Count_WithPredicate()
+    {
+        var clause = BuildClause(x => x.Items.Count(i => i.Qty > 1) >= 2);
+
+        clause.Sql.Should().Be($"(SELECT COUNT(*) FROM {ItemsSource} WHERE CAST(json_extract(e0.value, '$.Qty') AS INTEGER) > @p0) >= @p1");
+        clause.Parameters.Should().HaveCount(2);
+        clause.Parameters[0].Value.Should().Be(1);
+        clause.Parameters[1].Value.Should().Be(2L);
+    }
+
+    [Fact]
+    public void Should_Handle_Negated_Group()
+    {
+        var clause = BuildClause(x => !(x.Age > 18 || x.Name == "a"));
+
+        clause.Sql.Should().Be("NOT ((CAST(json_extract(document, '$.Age') AS INTEGER) > @p0 OR CAST(json_extract(document, '$.Name') AS TEXT) = @p1))");
     }
 
     private static Clause BuildClause(Expression<Func<TestModel, bool>> predicate) => BuildClauses(predicate).Single();
