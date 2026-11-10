@@ -26,8 +26,7 @@ public sealed class MariaDbFixture : IAsyncLifetime
         var password = Guid.NewGuid().ToString("N");
         var dbName = Guid.NewGuid().ToString("N");
 
-        _container = new MariaDbBuilder()
-            .WithImage("mariadb:11")
+        _container = new MariaDbBuilder("mariadb:11")
             .WithUsername(userName)
             .WithPassword(password)
             .WithDatabase(dbName)
