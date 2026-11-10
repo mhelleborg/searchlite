@@ -31,6 +31,19 @@ jobs:
         run: |
           projects=$(find Tests -name '*.Tests.csproj' | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "Found test projects: $projects"
+
+          # Every shipped package (Source/<Name>) must have a matching
+          # Tests/<Name>.Tests project, so a provider can never be released
+          # without being exercised by this matrix.
+          missing=0
+          for src in Source/*/*.csproj; do
+            name=$(basename "$src" .csproj)
+            if [ ! -f "Tests/$name.Tests/$name.Tests.csproj" ]; then
+              echo "::error::No test project for $name (expected Tests/$name.Tests/$name.Tests.csproj)"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
           echo "projects=$projects" >> "$GITHUB_OUTPUT"
 
   test:
@@ -65,8 +78,10 @@ jobs:
 
   release:
     name: Pack and Publish
-    if: github.event_name == 'release'
-    needs: test
+    # Only publish once every provider's test project has passed on this exact
+    # commit (the test matrix above also runs for the release event).
+    if: github.event_name == 'release' && success()
+    needs: [discover, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

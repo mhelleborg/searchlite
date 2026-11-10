@@ -16,8 +16,7 @@ public class PostgresFixture : IAsyncLifetime
         var password = Guid.NewGuid().ToString("N");
         var dbName = Guid.NewGuid().ToString("N");
 
-        _container = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
+        _container = new PostgreSqlBuilder("postgres:16-alpine")
             .WithUsername(userName)
             .WithPassword(password)
             .WithDatabase(dbName)
