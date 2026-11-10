@@ -7,6 +7,14 @@ on:
     branches: [ main ]
   release:
     types: [ published ]
+  # Re-publish an existing release tag (e.g. after a failed NuGet push) without
+  # recreating the GitHub release. Tests run again on the tag before publishing.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build, test and publish (e.g. v0.4.0)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +32,8 @@ jobs:
       projects: ${{ steps.find.outputs.projects }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Find test projects
         id: find
@@ -57,6 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Setup .NET
@@ -80,12 +91,17 @@ jobs:
     name: Pack and Publish
     # Only publish once every provider's test project has passed on this exact
     # commit (the test matrix above also runs for the release event).
-    if: github.event_name == 'release' && success()
+    if: (github.event_name == 'release' || github.event_name == 'workflow_dispatch') && success()
     needs: [discover, test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for NuGet trusted publishing (GitHub OIDC token exchange).
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Setup .NET
@@ -105,7 +121,7 @@ jobs:
       - name: Get version
         id: get_version
         run: |
-          TAG=${{ github.event.release.tag_name }}
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
           echo "VERSION=${TAG#v}" >> $GITHUB_ENV
 
       - name: Pack
@@ -119,5 +135,20 @@ jobs:
             packages/*.nupkg
           retention-days: 7
 
+      # Trusted publishing: exchange the workflow's OIDC token for a short-lived
+      # NuGet API key. NUGET_USER is the nuget.org profile name (not email) that
+      # owns the trusted publishing policy for this repo/workflow.
+      - name: NuGet login (trusted publishing)
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
+
+      # --skip-duplicate makes a retry safe if an earlier attempt published
+      # some of the packages before failing.
       - name: Publish
-        run: dotnet nuget push packages/*.nupkg -k ${{ secrets.NUGET_API_KEY }} -s https://api.nuget.org/v3/index.json
+        run: >-
+          dotnet nuget push packages/*.nupkg
+          --api-key ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
